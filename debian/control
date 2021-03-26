@@ -1,0 +1,30 @@
+Source: ddrescue
+Section: utils
+Priority: optional
+Maintainer: Kevin Chevreuil - Kaisen <kaisen@kaisenlinux.org>
+Build-Depends: debhelper-compat (= 12),
+ libattr1-dev,
+ libacl1-dev,
+ liblzo2-dev,
+ libssl-dev,
+ python-all,
+Standards-Version: 4.5.1
+Homepage: http://www.garloff.de/kurt/linux/ddrescue/
+Vcs-Git: https://gitlab.com/kaisenlinux/packages/ddrescue.git
+Vcs-Browser: https://gitlab.com/kaisenlinux/packages/ddrescue
+
+Package: ddrescue
+Architecture: any
+Depends: ${shlibs:Depends}, ${misc:Depends}
+Description: data recovery and protection tool
+ When your disk has crashed and you try to copy it over to another one,
+ standard Unix tools like cp, cat, and dd will abort on every I/O error,
+ dd_rescue does not.
+ It optimizes copying by using large blocks as long as no errors occur
+ and falls back to smaller blocks. It supports reverse direction copying
+ (to approach a bad spot from the top), sparse copying, preallocating
+ space, splice zerocopy, and bypassing the kernel pagecache with O_DIRECT.
+ dd_rescue provides safe deletion of data by overwriting files (or better
+ partitions/disks) multiple times with fast random numbers.
+ With the ddr_hash plugin, it supports calculating a hash value (such as
+ a sha256sum) or an HMAC during copying.
