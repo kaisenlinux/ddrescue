@@ -24,8 +24,8 @@ typedef struct _aes_rkeys {
 #define PAD_ASNEEDED 2
 
 /* Returned as negative vals from crypt fns */
-#define ILLEGAL_PADDING 1
-#define INCONSISTENT_PADDING 2
+#define ILLEGAL_PADDING 9
+#define INCONSISTENT_PADDING 10
 
 typedef unsigned char uchar;
 typedef unsigned int uint;
@@ -79,6 +79,13 @@ typedef struct _ciph_desc {
 } ciph_desc_t;
 
 
+#define XORN(in1,in2,out,len)	\
+do {				\
+	uint _i;		\
+	for (_i = 0; _i < len/sizeof(ulong); ++_i)	\
+		*((ulong*)(out)+_i) = *((ulong*)(in1)+_i) ^ *((ulong*)(in2)+_i);	\
+} while(0)
+
 /* Generic functions */
 int  AES_Gen_ECB_Enc(AES_Crypt_Blk_fn *cryptfn,
 		     const uchar* rkeys, uint rounds,
@@ -120,12 +127,6 @@ int  AES_Gen_CBC_Dec4(AES_Crypt_Blk_fn *cryptfn4,
 		     const uchar *input, uchar *output,
 		     ssize_t len, ssize_t *olen);
 int  AES_Gen_CTR_Crypt(AES_Crypt_Blk_fn *cryptfn,
-			const uchar *rkeys, uint rounds,
-			uchar *ctr, /* uint pad unused ,*/
-			const uchar *input, uchar *output,
-			ssize_t len/*, ssize_t *olen unused */);
-int  AES_Gen_CTR_Crypt4(AES_Crypt_Blk_fn *cryptfn4,
-			AES_Crypt_Blk_fn *cryptfn,
 			const uchar *rkeys, uint rounds,
 			uchar *ctr, /* uint pad unused ,*/
 			const uchar *input, uchar *output,

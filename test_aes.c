@@ -16,6 +16,12 @@
 #include <string.h>
 #include <assert.h>
 
+void usage()
+{
+	printf("Usage: test_aes [-s[-][N]] [-w] [ALG [REP [SEED [LEN [FILL]]]]]\n");
+	exit(0);
+}
+
 
 sec_fields *crypto;
 
@@ -68,23 +74,24 @@ void fillval(unsigned char* bf, ssize_t ln, unsigned int val)
 
 /* Defaults */
 
-#define REP 5000000
-#define DEF_LN 288
-#ifndef SHIFT
-# define SHIFT 5
-#endif
+#define REP 3000000
+unsigned int DEF_LN = 432;
+int shift = -1;
+int warmup = 0;
 
 /* TIMING */
 #define BENCH(_routine, _rep, _ln)	\
 	fflush(stdout);			\
-	/* _routine; */			\
+	if (warmup) {			\
+		_routine;		\
+	}				\
 	gettimeofday(&t1, NULL);	\
 	for (i = 0; i < (_rep); ++i) {	\
 		_routine; 		\
 		LFENCE;			\
 	}				\
 	gettimeofday(&t2, NULL);	\
-	tdiff = t2.tv_sec-t1.tv_sec + 0.000001*(t2.tv_usec-t1.tv_usec);	\
+	tdiff = t2.tv_sec-t1.tv_sec + 0.000001*(t2.tv_usec-t1.tv_usec) + 0.00000001;	\
 	printf("%6.3fs (%6.0fMB/s) ", tdiff, (double)(_rep)*(_ln)/(1e6*tdiff))
 
 
@@ -136,30 +143,60 @@ int last_epad, last_dpad;
 /* Result cache contents */
 uint last_eln, last_dln;
 int last_eres, last_dres;
-uchar last_ct[DEF_LN+32];
+uchar *last_ct;
+uchar do_shifted = 0;
 
 #define BLKSZ (alg->blocksize)
 
+#ifndef HAVE_ALIGNED_ALLOC
+void* aligned_alloc(size_t align, size_t len)
+{
+#ifdef HAVE_POSIX_MEMALIGN
+#warning Emulating aligned_alloc with posix_memalign
+	void* ptr;
+	int err = posix_memalign(&ptr, align, len);
+	if (err)
+		return 0;
+	else
+		return ptr;
+#else
+#warning Emulating aligned_alloc with plain alloc
+	void *ptr = malloc(len+align);
+	if (!ptr)
+		return 0;
+	else
+		return ((unsigned long)ptr%align? ptr+align-(unsigned long)ptr%align: ptr);
+#endif
+}
+#endif
+
 int test_alg(const char* prefix, ciph_desc_t *alg, uchar *key, uchar *in, ssize_t ln, int epad, int dpad, int rep)
 {
-	uchar ctxt[DEF_LN+32], vfy[DEF_LN+2*32];	/* OpenSSL may need +2*16, sigh */
-	uchar iv[32];
+	//uchar ctxt[DEF_LN+32], vfy[DEF_LN+2*32];	/* OpenSSL may need +2*16, sigh */
+	//uchar iv[32];
+	uchar *ctxt = aligned_alloc(64, ln+32);
+	uchar *vfy  = aligned_alloc(64, ln+2*32);
+	uchar *iv   = aligned_alloc(64, 32);
         struct timeval t1, t2;
 	double tdiff; 
 	int i;
 	int err = 0;
 	int eerr = 0, derr = 0;
+	unsigned long long ivhash, divhash;
 	ssize_t eln, dln;
 	ssize_t exp_eln = alg->stream->granul <= 1? ln: ((epad == PAD_ALWAYS || (ln&(BLKSZ-1)))? ln+BLKSZ-(ln&(BLKSZ-1)): ln);
 	++tested;
 	printf("* %s %s (%i, %i, %i) pad %i/%i", prefix, alg->name, alg->keylen, alg->rounds, alg->ctx_size, epad, dpad);
 	printf("\nEKey setup: ");
 	uchar *rkeys = (uchar*)crypto->ekeys;	//malloc(alg->ctx_size);
-	BENCH(alg->enc_key_setup(key, rkeys, alg->rounds); if (alg->release) alg->release(rkeys, alg->rounds), rep, 16*(1+alg->rounds));
+	BENCH(alg->enc_key_setup(key, rkeys, alg->rounds); if (alg->release) alg->release(rkeys, alg->rounds), rep*2, 16*(1+alg->rounds));
 	alg->enc_key_setup(key, rkeys, alg->rounds);
+	printf("%02x%02x%02x%02x%02x%02x%02x%02x ", rkeys[0], rkeys[16], rkeys[32], rkeys[64],
+			rkeys[16*(alg->rounds-3)], rkeys[16*(alg->rounds-2)], rkeys[16*(alg->rounds-1)], rkeys[16*alg->rounds]);
 	printf("\nEncrypt   : ");
-	BENCH(setup_iv(alg->stream, iv, BLKSZ); eerr = alg->encrypt(rkeys, alg->rounds, iv, epad, in, ctxt, ln, &eln); if (alg->recycle) alg->recycle(rkeys), rep/2+1, ln);
-	printf("%zi->%zi: %i ", ln, eln, eerr);
+	BENCH(setup_iv(alg->stream, iv, BLKSZ); eerr = alg->encrypt(rkeys, alg->rounds, iv, epad, in, ctxt, ln, &eln); if (alg->recycle) alg->recycle(rkeys), (rep+1)/2, ln);
+	memcpy(&ivhash, iv, 4); memcpy((uchar*)(&ivhash)+4, iv+12, 4);
+	printf("%zi->%zi: %i %016llx ", ln, eln, eerr, ivhash);
 	if (eerr < 0)
 		++err;
 	err += cmp_ln(eln, exp_eln, "encr vs exp");
@@ -172,12 +209,15 @@ int test_alg(const char* prefix, ciph_desc_t *alg, uchar *key, uchar *in, ssize_
 		alg->release(rkeys, alg->rounds);
 	//if (err) printf("%i ", err);
 	printf("\nDKey setup: ");
-	BENCH(alg->dec_key_setup(key, rkeys, alg->rounds); if (alg->release) alg->release(rkeys, alg->rounds), rep, 16*(1+alg->rounds));
+	BENCH(alg->dec_key_setup(key, rkeys, alg->rounds); if (alg->release) alg->release(rkeys, alg->rounds), rep*2, 16*(1+alg->rounds));
 	alg->dec_key_setup(key, rkeys, alg->rounds);
+	printf("%02x%02x%02x%02x%02x%02x%02x%02x ", rkeys[0], rkeys[16], rkeys[32], rkeys[64],
+			rkeys[16*(alg->rounds-3)], rkeys[16*(alg->rounds-2)], rkeys[16*(alg->rounds-1)], rkeys[16*alg->rounds]);
 	printf("\nDecrypt   : ");
 	memset(vfy, 0xff, DEF_LN+32);
-	BENCH(setup_iv(alg->stream, iv, BLKSZ); derr = alg->decrypt(rkeys, alg->rounds, iv, dpad, ctxt, vfy, eln, &dln); if (alg->recycle) alg->recycle(rkeys), rep/2+1, eln);
-	printf("%zi->%zi: %i ", eln, dln, derr);
+	BENCH(setup_iv(alg->stream, iv, BLKSZ); derr = alg->decrypt(rkeys, alg->rounds, iv, dpad, ctxt, vfy, eln, &dln); if (alg->recycle) alg->recycle(rkeys), (rep+1)/2, eln);
+	memcpy(&divhash, iv, 4); memcpy((uchar*)(&divhash)+4, iv+12, 4);
+	printf("%zi->%zi: %i %016llx ", eln, dln, derr, divhash);
 	if (derr < 0)
 		++err;
 	ssize_t exp_dln = alg->stream->granul <= 1? eln: (dpad? ln: eln);
@@ -201,6 +241,9 @@ int test_alg(const char* prefix, ciph_desc_t *alg, uchar *key, uchar *in, ssize_
 			printf("no %i pad ", BLKSZ-(int)(ln&(BLKSZ-1))); ++err;
 		}
 	}
+	if (ivhash != divhash) {
+		printf("iv miscompare "); ++err;
+	}
 	//if (err) printf("%i ", err);
 	/* Update cache */	
 	last_ln = ln; last_epad = epad; last_dpad = dpad;
@@ -213,7 +256,21 @@ int test_alg(const char* prefix, ciph_desc_t *alg, uchar *key, uchar *in, ssize_
 	if (alg->release)
 		alg->release(rkeys, alg->rounds);
 	//free(rkeys);
+	free(iv); free(vfy); free(ctxt);
 	return err;
+}
+
+int test_memcpy(uchar *in, ssize_t ln, int rep)
+{
+	uchar *ctxt = aligned_alloc(64, ln+32);
+        struct timeval t1, t2;
+	double tdiff;
+	int i;
+	printf("\nMemcpy    : ");
+	BENCH(memcpy(ctxt, in, ln), rep, ln);
+	printf("\n");
+	free(ctxt);
+	return 0;
 }
 
 #ifdef HAVE_LIBCRYPTO
@@ -226,10 +283,26 @@ int test_alg(const char* prefix, ciph_desc_t *alg, uchar *key, uchar *in, ssize_
 #endif
 
 #ifdef HAVE_AESNI
+#ifndef NO_AVX2
 #define TEST_AESNI(LN, EPAD, DPAD)			\
-	alg = findalg(AESNI_Methods, testalg, 1);	\
+	do {						\
+	const char* label;				\
+	if (have_avx2) {				\
+		label = "VAES ";			\
+		alg = findalg(VAESNI_Methods, testalg, 1);	\
+	} else {					\
+		label = "AESNI";			\
+		alg = findalg(SAESNI_Methods, testalg, 1);	\
+	}						\
+	if (alg)					\
+		ret += test_alg(label, alg, key, in, LN, EPAD, DPAD, rep);	\
+	} while(0)
+#else
+#define TEST_AESNI(LN, EPAD, DPAD)			\
+	alg = findalg(SAESNI_Methods, testalg, 1);	\
 	if (alg)					\
 		ret += test_alg("AESNI", alg, key, in, LN, EPAD, DPAD, rep)
+#endif
 #else
 #define TEST_AESNI(LN, EPAD, DPAD) do {} while(0)
 #endif
@@ -245,28 +318,57 @@ int test_alg(const char* prefix, ciph_desc_t *alg, uchar *key, uchar *in, ssize_
 
 
 #define TEST_ENGINES(LN, EPAD, DPAD)			\
-	TEST_AESNI(LN, EPAD, DPAD);			\
-	TEST_AES_ARM64(LN, EPAD, DPAD);			\
 	alg = findalg(AES_C_Methods, testalg, 1);	\
 	if (alg) 					\
-		ret += test_alg("AES_C", alg, key, in, LN, EPAD, DPAD, rep);	\
-	TEST_OSSL(LN, EPAD, DPAD)
+		ret += test_alg("AES_C", alg, key, in, LN, EPAD, DPAD, (rep+3)/4);	\
+	TEST_OSSL(LN, EPAD, DPAD);			\
+	TEST_AESNI(LN, EPAD, DPAD);			\
+	TEST_AES_ARM64(LN, EPAD, DPAD);	
 
 int ret = 0;
 int main(int argc, char *argv[])
 {
 	int rep = REP;
-	unsigned char in[DEF_LN+16];
 	unsigned char *key = (unsigned char*)"Test Key_123 is long enough even for AES-256";
 	//int dbg = 0;
 	char* testalg;
 	ARCH_DETECT;
+#if defined(__i386__) || defined(__x86_64__)
+	printf("CPU Features: SSE2 %i SSE4.2 %i AES %i RDRAND %i AVX2 %i VAES %i\n",
+		have_sse2, have_sse42, have_aesni, have_rdrand, have_avx2, have_vaes);
+#elif defined(__arm__) || defined(__aarch64__)
+	//have_arm8crypto = 1;
+	printf("CPU Features: AES Arm8 %i\n",
+		have_arm8crypto);
+#endif
 	crypto = secmem_init();
 	/*
 	if (argc > 1 && !strcmp("-d", argv[1])) {
 		dbg = 1; --argc; ++argv;
 	}
 	*/
+	if (argc > 1 && !strcmp(argv[1], "-h"))
+		usage();
+	/* Repeat the run with a changed length */
+	if (argc > 1 && !memcmp(argv[1], "-s", 2)) {
+		do_shifted = 1;
+		if (strlen(argv[1]) > 2)
+			shift = atol(argv[1]+2);
+		--argc; ++argv;
+	}
+	/* Do a warmup run */
+	if (argc > 1 && !strcmp(argv[1], "-w")) {
+		warmup = 1;
+		--argc; ++argv;
+	}
+#if !defined(NO_AVX2) && (defined(__i386__) || defined(__x86_64__))
+	/* Disable AVX override */
+	if (argc > 1 && !strcmp(argv[1], "-2")) {
+		have_avx2 = 0;
+		--argc; ++argv;
+	}
+#endif
+	/* Positional parameters following */
 	if (argc > 1)
 		testalg = argv[1];
 	else
@@ -278,13 +380,18 @@ int main(int argc, char *argv[])
 	else
 		srand(time(NULL));
 	if (argc > 4)
-		fillval(in, DEF_LN, atol(argv[4]));
+		DEF_LN = atol(argv[4]);
+
+	unsigned char *in = aligned_alloc(64, DEF_LN+16);
+	last_ct = aligned_alloc(64, DEF_LN+32);
+	if (argc > 5)
+		fillval(in, DEF_LN, atol(argv[5]));
 	else
 		fillrand(in, DEF_LN);
 
-
 	ciph_desc_t *alg = NULL;
 	//OPENSSL_init();
+	test_memcpy(in, DEF_LN, rep*4);
 	printf("===> AES tests/benchmark (%i) PAD_ZERO <===\n", DEF_LN);
 	TEST_ENGINES(DEF_LN, PAD_ZERO, PAD_ZERO);
 	if (ret) {
@@ -292,12 +399,14 @@ int main(int argc, char *argv[])
 		secmem_release(crypto);
 		return ret;
 	}
-	printf("===> AES tests/benchmark (%i) PAD_ZERO <===\n", DEF_LN-SHIFT);
-	TEST_ENGINES(DEF_LN-SHIFT, PAD_ZERO, PAD_ZERO);
+	if((long)DEF_LN+shift >= 0 && do_shifted) {
+	printf("===> AES tests/benchmark (%i) PAD_ZERO <===\n", DEF_LN+shift);
+	TEST_ENGINES(DEF_LN+shift, PAD_ZERO, PAD_ZERO);
 	if (ret) {
 		fprintf(stderr, " ************* %i inconsistencies found\n", ret);
 		secmem_release(crypto);
 		return ret;
+	}
 	}
 	printf("\n===> AES tests/benchmark (%i) PAD_ALWAYS <===\n", DEF_LN);
 	TEST_ENGINES(DEF_LN, PAD_ALWAYS, PAD_ALWAYS);
@@ -306,24 +415,34 @@ int main(int argc, char *argv[])
 		secmem_release(crypto);
 		return ret;
 	}
-	printf("===> AES tests/benchmark (%i) PAD_ALWAYS <===\n", DEF_LN-SHIFT);
-	TEST_ENGINES(DEF_LN-SHIFT, PAD_ALWAYS, PAD_ALWAYS);
+	if((long)DEF_LN+shift >= 0 && do_shifted) {
+	printf("===> AES tests/benchmark (%i) PAD_ALWAYS <===\n", DEF_LN+shift);
+	TEST_ENGINES(DEF_LN+shift, PAD_ALWAYS, PAD_ALWAYS);
 	if (ret) {
 		fprintf(stderr, " ************* %i inconsistencies found\n", ret);
 		secmem_release(crypto);
 		return ret;
 	}
+	}
 	printf("\n===> AES tests/benchmark (%i) PAD_ASNEEDED <===\n", DEF_LN);
 	TEST_ENGINES(DEF_LN, PAD_ASNEEDED, PAD_ASNEEDED);
-	printf("===> AES tests/benchmark (%i) PAD_ASNEEDED <===\n", DEF_LN-SHIFT);
-	TEST_ENGINES(DEF_LN-SHIFT, PAD_ASNEEDED, PAD_ASNEEDED);
+	if (ret) {
+		fprintf(stderr, " ************* %i inconsistencies found\n", ret);
+		secmem_release(crypto);
+		return ret;
+	}
+	if((long)DEF_LN+shift >= 0 && do_shifted) {
+	printf("===> AES tests/benchmark (%i) PAD_ASNEEDED <===\n", DEF_LN+shift);
+	TEST_ENGINES(DEF_LN+shift, PAD_ASNEEDED, PAD_ASNEEDED);
 	if (ret) {
 		fprintf(stderr, " ************* PAD_ASNEEDED: %i inconsistencies found. (Ignore!) ************* \n", ret);
 		ret = 0;
 	}
+	}
 
 	printf("\n");
 	secmem_release(crypto);
+	free(last_ct); free(in);
 	return (tested? ret: -1);
 }
 

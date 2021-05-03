@@ -14,26 +14,17 @@
 
 const char* stypes[] = { "ECB", "CBC", "CTR" };
 
+/*
 void xor16(const uchar x1[16], const uchar x2[16], uchar xout[16])
 {
 	uint i;
 	for (i = 0; i < 16; i+=sizeof(ulong))
 		*(ulong*)(xout+i) = *(ulong*)(x1+i) ^ *(ulong*)(x2+i);
 }
-
-void xor48(const uchar x1[48], const uchar x2[48], uchar xout[48])
-{
-	uint i;
-	for (i = 0; i < 48; i+=sizeof(ulong))
-		*(ulong*)(xout+i) = *(ulong*)(x1+i) ^ *(ulong*)(x2+i);
-}
-
-void xor64(const uchar x1[64], const uchar x2[64], uchar xout[64])
-{
-	uint i;
-	for (i = 0; i < 64; i+=sizeof(ulong))
-		*(ulong*)(xout+i) = *(ulong*)(x1+i) ^ *(ulong*)(x2+i);
-}
+*/
+#define XOR16(x1,x2,xo) XORN(x1,x2,xo,16)
+#define XOR48(x1,x2,xo) XORN(x1,x2,xo,48)
+#define XOR64(x1,x2,xo) XORN(x1,x2,xo,64)
 
 /* PKCS padding */
 void fill_blk(const uchar *in, uchar bf[16], ssize_t len, uint pad)
@@ -58,7 +49,7 @@ int  AES_Gen_ECB_Enc(AES_Crypt_Blk_fn *cryptfn,
 		len -= 16; input += 16; output += 16;
 	}
 	if (len || pad == PAD_ALWAYS) {
-		uchar in[16];
+		uchar *in = crypto->blkbuf2;
 		fill_blk(input, in, len, pad);
 		cryptfn(rkeys, rounds, in, output);
 		*olen += 16-(len&15);
@@ -82,7 +73,7 @@ int  AES_Gen_ECB_Enc4(AES_Crypt_Blk_fn *cryptfn4, AES_Crypt_Blk_fn *cryptfn,
 		len -= 16; input += 16; output += 16;
 	}
 	if (len || pad == PAD_ALWAYS) {
-		uchar in[16];
+		uchar *in = crypto->blkbuf2;
 		fill_blk(input, in, len, pad);
 		cryptfn(rkeys, rounds, in, output);
 		*olen += 16-(len&15);
@@ -113,18 +104,19 @@ int  AES_Gen_ECB_Enc4(AES_Crypt_Blk_fn *cryptfn4, AES_Crypt_Blk_fn *cryptfn,
  */
 int dec_fix_olen_pad(ssize_t *olen, uint pad, const uchar *output)
 {
-	if (!pad)
+	if (!pad || !*olen)
 		return 0;
-	uchar last = output[-1];
+	uchar last = *(output-1);
 	if (last > 0x10)
 		return (pad == PAD_ASNEEDED? ILLEGAL_PADDING: -ILLEGAL_PADDING);
-	uint i;
+	int i;
 	for (i = 1; i < last; ++i) {
 		if (*(output-1-i) != last) 
 			return (pad == PAD_ASNEEDED? INCONSISTENT_PADDING: -INCONSISTENT_PADDING);
 	}
 	int err = 0;
 	if (pad != PAD_ALWAYS) {
+		// Only report risk if larger than 2^-64
 		if (last < 8)
 			err = last;
 	}
@@ -182,17 +174,18 @@ int  AES_Gen_CBC_Enc(AES_Crypt_Blk_fn *cryptfn,
 {
 	*olen = len;
 	while (len >= 16) {
-		xor16(iv, input, iv);
+		XOR16(iv, input, iv);
 		cryptfn(rkeys, rounds, iv, iv);
 		memcpy(output, iv, 16);
 		len -= 16; input += 16; output += 16;
 	}
 	if (len || pad == PAD_ALWAYS) {
-		uchar *in = crypto->blkbuf1;
+		uchar *in = crypto->blkbuf2;
 		fill_blk(input, in, len, pad);
-		xor16(iv, in, iv);
+		XOR16(iv, in, iv);
 		cryptfn(rkeys, rounds, iv, output);
-		//memcpy(iv, output, 16);
+		/* Store last IV */
+		memcpy(iv, output, 16);
 		*olen += 16-(len&15);
 		//memset(in, 0, 16);
 		//LFENCE;
@@ -206,11 +199,11 @@ int  AES_Gen_CBC_Dec(AES_Crypt_Blk_fn *cryptfn,
 		     const uchar *input, uchar *output,
 		     ssize_t len, ssize_t *olen)
 {
-	uchar *ebf = crypto->blkbuf1;
+	uchar *ebf = crypto->blkbuf3;
 	*olen = len;
 	while (len > 0) {
 		cryptfn(rkeys, rounds, input, ebf);
-		xor16(iv, ebf, output);
+		XOR16(iv, ebf, output);
 		memcpy(iv, input, 16);
 		len -= 16; input += 16; output += 16;
 	}
@@ -229,18 +222,18 @@ int  AES_Gen_CBC_Dec4(AES_Crypt_Blk_fn *cryptfn4,
 		     const uchar *input, uchar *output,
 		     ssize_t len, ssize_t *olen)
 {
-	uchar *ebf = crypto->blkbuf2;
+	uchar *ebf = crypto->blkbuf3;
 	*olen = len;
 	while (len >= 64) {
 		cryptfn4(rkeys, rounds, input, ebf);
-		xor16(iv, ebf, output);
-		xor48(input, ebf+16, output+16);
+		XOR16(iv, ebf, output);
+		XOR48(input, ebf+16, output+16);
 		memcpy(iv, input+48, 16);
 		len -= 64; input += 64; output += 64;
 	}
 	while (len > 0) {
 		cryptfn(rkeys, rounds, input, ebf);
-		xor16(iv, ebf, output);
+		XOR16(iv, ebf, output);
 		memcpy(iv, input, 16);
 		len -= 16; input += 16; output += 16;
 	}
@@ -306,20 +299,21 @@ int  AES_Gen_CTR_Crypt(AES_Crypt_Blk_fn *cryptfn,
 {
 	//assert(pad == 0);
 	//*olen = len;
-	uchar *eblk = crypto->blkbuf2;
+	uchar *eblk = crypto->blkbuf3;
 	while (len >= 16) {
 		cryptfn(rkeys, rounds, ctr, eblk);
-		be_inc(ctr+8);	
-		xor16(eblk, input, output);
+		be_inc(ctr+8);
+		XOR16(eblk, input, output);
 		len -= 16;
 		input += 16; output += 16;
 	}
 	if (len) {
-		uchar *in = crypto->blkbuf1;
+		uchar *in = crypto->blkbuf2;
 		fill_blk(input, in, len, 0 /*pad*/);
 		cryptfn(rkeys, rounds, ctr, eblk);
-		//be_inc(ctr+8);	
-		xor16(eblk, in, in);
+		/* We do increase the last blk */
+		be_inc(ctr+8);
+		XOR16(eblk, in, in);
 		memcpy(output, in, len&15);
 		//memset(in, 0, 16);
 	}
@@ -348,98 +342,15 @@ int  AES_Gen_CTR_Crypt_Opt(AES_Crypt_CTR_Blk_fn *cryptfn4c,
 		input += 16; output += 16;
 	}
 	if (len) {
-		uchar *in = crypto->blkbuf1;
-		uchar *eblk = crypto->blkbuf2;
-		// Do we really need to uncount the last incomplete block?
-		/* FIXME: This is inconsistent, but irrelevant for now */
-		//uchar octr[16];
-		//memcpy(octr, ctr, 16);
+		uchar *in = crypto->blkbuf2;
+		uchar *eblk = crypto->blkbuf3;
 		fill_blk(input, in, len, 0 /*pad*/);
 		cryptfnc(rkeys, rounds, in, eblk, ctr);
 		memcpy(output, eblk, len&15);
-		//memset(in, 0, 16);
-		//memcpy(ctr, octr, 16);
-		//memset(eblk, 0, 16);
+		//memset(in, 0, len&15);
+		//memset(eblk, 0, len);
 		//LFENCE;
 	}
-	return 0;
-}
-
-int  AES_Gen_CTR_Crypt4(AES_Crypt_Blk_fn *cryptfn4,
-			AES_Crypt_Blk_fn *cryptfn,
-			const uchar *rkeys, uint rounds,
-			uchar *ctr, /* uint pad, */
-			const uchar *input, uchar *output,
-			ssize_t len/*, ssize_t *olen */)
-{
-	//assert(pad == 0);
-	//*olen = len;
-	uchar *eblk = crypto->blkbuf2;
-	uchar cblk[64];
-#if 0
-	if (len >= 64) {
-		memcpy(cblk, ctr, 16);
-		be_inc(ctr+8);
-		memcpy(cblk+16, ctr, 16);
-		be_inc(ctr+8);
-		memcpy(cblk+32, ctr, 16);
-		be_inc(ctr+8);
-		memcpy(cblk+48, ctr, 16);
-	} 
-	while (len >= 128) {
-		cryptfn4(rkeys, rounds, cblk, eblk);
-		be4_inc4(cblk);
-		xor64(eblk, input, output);
-		len -= 64;
-		input += 64; output += 64;
-	}
-	if (len >= 64) {
-		cryptfn4(rkeys, rounds, cblk, eblk);
-		be_inc4(cblk+8);
-		xor64(eblk, input, output);
-		memcpy(ctr+8, cblk+8, 8);
-		len -= 64;
-		input += 64; output += 64;
-	}
-#else
-	if (len >= 64) {
-		memcpy(cblk, ctr, 8);
-		memcpy(cblk+16, ctr, 8);
-		memcpy(cblk+32, ctr, 8);
-		memcpy(cblk+48, ctr, 8);
-	}
-	while (len >= 64) {
-		memcpy(cblk+ 8, ctr+8, 8);
-		be_inc(ctr+8);
-		memcpy(cblk+24, ctr+8, 8);
-		be_inc(ctr+8);
-		memcpy(cblk+40, ctr+8, 8);
-		be_inc(ctr+8);
-		memcpy(cblk+56, ctr+8, 8);
-		cryptfn4(rkeys, rounds, cblk, eblk);
-		be_inc(ctr+8);
-		xor64(eblk, input, output);
-		len -= 64;
-		input += 64; output += 64;
-	}
-#endif	
-	while (len >= 16) {
-		cryptfn(rkeys, rounds, ctr, eblk);
-		be_inc(ctr+8);	
-		xor16(eblk, input, output);
-		len -= 16;
-		input += 16; output += 16;
-	}
-	if (len) {
-		uchar *in = crypto->blkbuf1;
-		fill_blk(input, in, len, 0 /*pad*/);
-		cryptfn(rkeys, rounds, ctr, eblk);
-		//be_inc(ctr+8);	
-		xor16(eblk, in, in);
-		memcpy(output, in, len&15);
-	}
-	//memset(eblk, 0, 16);
-	//LFENCE;
 	return 0;
 }
 

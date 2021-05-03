@@ -2,12 +2,13 @@
 # (c) garloff@suse.de, 99/10/09, GNU GPL
 # (c) kurt@garloff.de, 2010 -- 2021, GNU GPL v2 or v3
 
-VERSION = 1.99.10
+VERSION = 1.99.11
 
 DESTDIR = 
 SRCDIR = .
 
-CC ?= gcc
+CC = gcc
+SHELL = /bin/bash
 RPM_OPT_FLAGS ?= -Os -Wall -g -D_FORTIFY_SOURCE=2
 CFLAGS = $(RPM_OPT_FLAGS) $(EXTRA_CFLAGS) -DHAVE_CONFIG_H -I .
 CFLAGS_OPT = $(CFLAGS) -O3
@@ -90,8 +91,10 @@ endif
 ifeq ($(ISX86), 1)
 HAVE_SSE42 := $(shell echo "" | $(CC) -msse4.2 -xc - 2>&1 | grep unrecognized || echo 1)
 HAVE_AES := $(shell echo "" | $(CC) -maes -xc - 2>&1 | grep unrecognized || echo 1)
+HAVE_AVX := $(shell echo "" | $(CC) -mavx -xc - 2>&1 | grep unrecognized || echo 1)
 HAVE_AVX2 := $(shell echo "" | $(CC) -mavx2 -xc - 2>&1 | grep unrecognized || echo 1)
 HAVE_RDRND := $(shell echo "" | $(CC) -mrdrnd -xc - 2>&1 | grep unrecognized || echo 1)
+HAVE_VAES := $(shell echo "" | $(CC) -mvaes -xc - 2>&1 | grep unrecognized || echo 1)
 endif
 
 ifneq ($(HAVE_RDRND),1)
@@ -99,6 +102,9 @@ ifneq ($(HAVE_RDRND),1)
 endif
 ifneq ($(HAVE_AES),1)
 	HAVE_AES = 0
+endif
+ifneq ($(HAVE_VAES),1)
+	HAVE_VAES = 0
 endif
 
 
@@ -132,8 +138,21 @@ endif
 ifeq ($(HAVE_AVX2),1)
 	OBJECTS2 += find_nonzero_avx.o
 	ARCHFLAGS +=  -mavx2
+ifeq ($(HAVE_AES),1)
+	AESNI_O += aesni_avx.o
+	AESNI_PO += aesni_avx.po
+endif
 else
 	CFLAGS += -DNO_AVX2
+endif
+ifeq ($(HAVE_VAES),1)
+	#OBJECTS2 += rdrand.o
+	#POBJECTS2 += rdrand.po
+	ARCHFLAGS += -mvaes -mavx2
+	VAESFLAGS = -mvaes -mavx2
+else
+	VAESFLAGS = -mavx2
+	CFLAGS += -DNO_VAES
 endif
 ifeq ($(HAVE_RDRND),1)
 	#OBJECTS2 += rdrand.o
@@ -233,10 +252,19 @@ md5.po: $(SRCDIR)/md5.c
 sha256.po: $(SRCDIR)/sha256.c
 	$(CC) $(CFLAGS_OPT) $(PIC) -o $@ -c $<
 
+sha256.o: $(SRCDIR)/sha256.c
+	$(CC) $(CFLAGS_OPT) $(PIE) -c $<
+
 sha512.po: $(SRCDIR)/sha512.c
 	$(CC) $(CFLAGS_OPT) $(PIC) -o $@ -c $<
 
+sha512.o: $(SRCDIR)/sha512.c
+	$(CC) $(CFLAGS_OPT) $(PIE) -c $<
+
 sha1.po: $(SRCDIR)/sha1.c
+	$(CC) $(CFLAGS_OPT) $(PIC) -o $@ -c $<
+
+aes_c.po: $(SRCDIR)/aes_c.c
 	$(CC) $(CFLAGS_OPT) $(PIC) -o $@ -c $<
 
 # Default rules
@@ -300,18 +328,26 @@ ffs_sse42.o: $(SRCDIR)/ffs_sse42.c
 ffs_sse42.po: $(SRCDIR)/ffs_sse42.c
 	$(CC) $(CFLAGS_OPT) $(PIC) -msse4.2 -o $@ -c $<
 
+ifeq ($(HAVE_VAES),1)
+rdrand.o: $(SRCDIR)/rdrand.c
+	$(CC) $(CFLAGS) $(PIE) -mrdrnd -maes -mavx2 -mvaes -c $<
+
+rdrand.po: $(SRCDIR)/rdrand.c
+	$(CC) $(CFLAGS) $(PIC) -mrdrnd -maes -mavx2 -mvaes -o $@ -c $<
+else
 ifeq ($(HAVE_RDRND),1)
 rdrand.o: $(SRCDIR)/rdrand.c
-	$(CC) $(CFLAGS) $(PIE) -mrdrnd -maes -c $<
+	$(CC) $(CFLAGS) $(PIE) -mrdrnd -maes -msse4.1 -c $<
 
 rdrand.po: $(SRCDIR)/rdrand.c
-	$(CC) $(CFLAGS) $(PIC) -mrdrnd -maes -o $@ -c $<
+	$(CC) $(CFLAGS) $(PIC) -mrdrnd -maes -msse4.1 -o $@ -c $<
 else
 rdrand.o: $(SRCDIR)/rdrand.c
-	$(CC) $(CFLAGS) $(PIE) -maes -c $<
+	$(CC) $(CFLAGS) $(PIE) -maes -msse4.1 -c $<
 
 rdrand.po: $(SRCDIR)/rdrand.c
-	$(CC) $(CFLAGS) $(PIC) -maes -o $@ -c $<
+	$(CC) $(CFLAGS) $(PIC) -maes -msse4.1 -o $@ -c $<
+endif
 endif
 
 # TODO: Build binaries from .o file, so we can save some special rules ...
@@ -390,6 +426,13 @@ test_aes: $(SRCDIR)/test_aes.c $(AESNI_O) $(AES_ARM64_O) aes_c.o secmem.o sha256
 	$(CC) $(CFLAGS) $(PIE) $(LDPIE) $(DEF) -o $@ $< $(AESNI_O) $(AES_ARM64_O) aes_c.o secmem.o sha256.o $(AES_OSSL_O) aes.o find_nonzero.o $(OBJECTS2) $(CRYPTOLIB)
 
 # Special optimized versions
+ifeq ($(HAVE_AVX2),1)
+aesni_avx.o: $(SRCDIR)/aesni.c
+	$(CC) $(CFLAGS) $(PIE) -O3 -maes $(VAESFLAGS) -c $< -o $@
+
+aesni_avx.po: $(SRCDIR)/aesni.c
+	$(CC) $(CFLAGS) $(PIC) -O3 -maes $(VAESFLAGS) -c $< -o $@
+endif
 aesni.o: $(SRCDIR)/aesni.c
 	$(CC) $(CFLAGS) $(PIE) -O3 -maes -msse4.1 -c $<
 

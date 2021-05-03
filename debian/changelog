@@ -1,5 +1,11 @@
+ddrescue (1.99.11-1kaisen) kaisen-packages; urgency=medium
+
+  * Update at 1.99.11
+
+ -- Kevin Chevreuil - Kaisen <kaisen@kaisenlinux.org>  Mon, 03 May 2021 17:42:27 +0200
+
 ddrescue (1.99.10-1kaisen1) kaisen-testing; urgency=medium
 
   * First packaging for Kaisen Linux
 
- -- Kevin Chevreuil - Kaisen <kaisen@kaisenlinux.org>  Fri, 26 Mar 2020 04:06:34 +0200
+ -- Kevin Chevreuil - Kaisen <kaisen@kaisenlinux.org>  Fri, 26 Mar 2021 04:06:34 +0200
