@@ -7,7 +7,6 @@ Build-Depends: debhelper-compat (= 12),
  libacl1-dev,
  liblzo2-dev,
  libssl-dev,
- python-all,
 Standards-Version: 4.5.1
 Homepage: http://www.garloff.de/kurt/linux/ddrescue/
 Vcs-Git: https://gitlab.com/kaisenlinux/packages/ddrescue.git

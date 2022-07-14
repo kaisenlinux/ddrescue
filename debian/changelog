@@ -1,3 +1,11 @@
+ddrescue (1.99.11-2kaisen) kaisen-packages; urgency=medium
+
+  * Add manpages
+  * Build with no exec all checks
+  * Remove the python-all package required to build the package
+
+ -- Kevin Chevreuil - Kaisen <kaisen@kaisenlinux.org>  Thu, 14 Jul 2022 05:18:43 +0100
+
 ddrescue (1.99.11-1kaisen) kaisen-packages; urgency=medium
 
   * Update at 1.99.11
