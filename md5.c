@@ -51,12 +51,6 @@ static inline void to_bytes(uint32_t val, uint8_t *bytes)
 {
 	*(uint32_t *)bytes = val;
 }
-#if 0	// Unused
-static inline uint32_t to_int32(const uint8_t *bytes)
-{
-	return *(const uint32_t *)bytes;
-}
-#endif
 #else
 /* Store val into bytes in little endian fmt */
 static inline void to_bytes(uint32_t val, uint8_t *bytes)
@@ -67,6 +61,9 @@ static inline void to_bytes(uint32_t val, uint8_t *bytes)
 	bytes[3] = (uint8_t)(val >> 24);
 }
 
+#endif
+
+#if !defined(HAVE_UNALIGNED_HANDLING) || __BYTE_ORDER != __LITTLE_ENDIAN
 /* Read val from little-endian array */
 static inline uint32_t to_int32(const uint8_t *bytes)
 {
@@ -87,19 +84,30 @@ static inline uint32_t to_int32(const uint8_t *bytes)
 void md5_64(const uint8_t *ptr, hash_t *ctx)
 {
 	uint32_t _a, _b, _c, _d;
+#if !defined(HAVE_UNALIGNED_HANDLING) || __BYTE_ORDER != __LITTLE_ENDIAN
+	uint32_t ww[16];
+#endif
 	unsigned int i;
 
 #if __BYTE_ORDER == __LITTLE_ENDIAN
 	uint32_t *w = (uint32_t *)ptr;
-#ifdef HAVE___BUILTIN_PREFETCH
-	__builtin_prefetch(ptr, 0, 3);
-//__builtin_prefetch(ptr+32, 0, 3);
+	// Avoid misaligned 32bit reads (ARMv7)
+#if !defined(HAVE_UNALIGNED_HANDLING)
+	if ((unsigned long)ptr % 4) {
+		w = ww;
+		for (i = 0; i < 16; ++i)
+			ww[i] = to_int32(ptr + i * 4);
+	}
 #endif
 #else /* BIG ENDIAN */
-	uint32_t w[16];
+	uint32_t *w = ww;
 	// break chunk into sixteen 32-bit words w[j], 0 ≤ j ≤ 15
 	for (i = 0; i < 16; ++i)
-		w[i] = to_int32(ptr + i * 4);
+		ww[i] = to_int32(ptr + i * 4);
+#endif
+#ifdef HAVE___BUILTIN_PREFETCH
+	__builtin_prefetch(ptr, 0, 3);
+	//__builtin_prefetch(ptr+32, 0, 3);
 #endif
 
 	// Initialize hash value for this chunk:

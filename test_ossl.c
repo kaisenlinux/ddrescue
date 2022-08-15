@@ -1,6 +1,11 @@
 #include "aes.h"
 #include <string.h>
+#ifdef HAVE_CONFIG_H
+#include "config.h"
+#endif
+#ifdef HAVE_OPENSSL_EVP_H
 #include <openssl/evp.h>
+#endif
 #include <assert.h>
 
 void fill_pt(uchar* ptr)

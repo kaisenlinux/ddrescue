@@ -2,10 +2,10 @@
 # (c) garloff@suse.de, 99/10/09, GNU GPL
 # (c) kurt@garloff.de, 2010 -- 2021, GNU GPL v2 or v3
 
-VERSION = 1.99.11
+VERSION = 1.99.12
 
 DESTDIR = 
-SRCDIR = .
+SRCDIR ?= .
 
 CC = gcc
 SHELL = /bin/bash
@@ -26,7 +26,10 @@ TMPDIR ?= /tmp
 BINTARGETS = dd_rescue 
 LIBTARGETS = libddr_hash.so libddr_MD5.so libddr_null.so libddr_crypt.so
 #TARGETS = libfalloc-dl
-OTHTARGETS = find_nonzero fiemap file_zblock fmt_no md5 sha256 sha512 sha224 sha384 sha1 test_aes
+OTHTARGETS = find_nonzero fiemap file_zblock fmt_no md5 sha256 sha512 sha224 sha384 sha1 test_aes # test_aligned_alloc
+ifneq ($(NO_ALIGNED_ALLOC),1)
+	OTHTARGETS += test_aligned_alloc
+endif
 OBJECTS = random.o frandom.o fmt_no.o find_nonzero.o 
 FNZ_HEADERS = $(SRCDIR)/find_nonzero.h $(SRCDIR)/archdep.h $(SRCDIR)/ffs.h
 DDR_HEADERS = config.h $(SRCDIR)/random.h $(SRCDIR)/frandom.h $(SRCDIR)/list.h $(SRCDIR)/fmt_no.h $(SRCDIR)/find_nonzero.h $(SRCDIR)/archdep.h $(SRCDIR)/ffs.h $(SRCDIR)/fstrim.h $(SRCDIR)/ddr_plugin.h $(SRCDIR)/ddr_ctrl.h $(SRCDIR)/splice.h $(SRCDIR)/fallocate64.h $(SRCDIR)/pread64.h
@@ -207,7 +210,7 @@ all: $(TARGETS) $(OTHTARGETS)
 #	test -e Makefile || ln -s $(SRCDIR)/Makefile .
 
 config.h: $(SRCDIR)/configure $(SRCDIR)/config.h.in
-	$(SRCDIR)/configure
+	$(SRCDIR)/configure && touch config.h
 	test -e test_crypt.sh || ln -s $(SRCDIR)/test_crypt.sh .
 	test -e test_lzo_fuzz.sh || ln -s $(SRCDIR)/test_lzo_fuzz.sh .
 	test -e calchmac.py || ln -s $(SRCDIR)/calchmac.py .
@@ -216,7 +219,7 @@ $(SRCDIR)/configure: $(SRCDIR)/configure.ac
 	cd $(SRCDIR) && autoconf
 
 $(SRCDIR)/config.h.in: $(SRCDIR)/configure.ac
-	cd $(SRCDIR) && autoheader
+	cd $(SRCDIR) && autoheader && touch config.h.in
 
 # The headers for x86 intrinsics cause breakage while preprocessing 
 # for dependency generation :-( Workaround ...
@@ -434,10 +437,10 @@ aesni_avx.po: $(SRCDIR)/aesni.c
 	$(CC) $(CFLAGS) $(PIC) -O3 -maes $(VAESFLAGS) -c $< -o $@
 endif
 aesni.o: $(SRCDIR)/aesni.c
-	$(CC) $(CFLAGS) $(PIE) -O3 -maes -msse4.1 -c $<
+	$(CC) $(CFLAGS) $(PIE) -O3 -maes -msse4.1 -DNO_AVX2 -c $<
 
 aesni.po: $(SRCDIR)/aesni.c
-	$(CC) $(CFLAGS) $(PIC) -O3 -maes -msse4.1 -c $< -o $@
+	$(CC) $(CFLAGS) $(PIC) -O3 -maes -msse4.1 -DNO_AVX2 -c $< -o $@
 
 aes_arm64.o: $(SRCDIR)/aes_arm64.c
 	$(CC) $(CFLAGS) $(PIE) -O3 -march=armv8-a+crypto -c $<
@@ -670,7 +673,8 @@ check_lzo: $(TARGETS)
 	$(VG) ./dd_rescue -aL ./libddr_lzo.so,./libddr_MD5.so=output test.lzo test.cmp > MD5
 	md5sum -c MD5
 	cmp test test.cmp
-	rm -f MD5 test test.lzo test.cmp
+	for hash in md5 sha1 sha224 sha256 sha384 sha512; do $(VG) ./dd_rescue -b16k -TL ./libddr_lzo.so=compress,./libddr_hash.so=$$hash:outfd=1 dd_rescue dd_rescue.lzo > ddr.hash || exit 1; $${hash}sum -c ddr.hash || exit 2; done
+	rm -f MD5 test test.lzo test.cmp ddr.hash dd_rescue.lzo
 	
 check_lzo_algos: $(TARGETS)
 	for alg in lzo1x_1 lzo1x_1_11 lzo1x_1_12 lzo1x_1_15 lzo1x_999 lzo1y_1 lzo1y_999 lzo1f_1 lzo1f_999 lzo1b_1 lzo1b_2 lzo1b_3 lzo1b_4 lzo1b_5 lzo1b_6 lzo1b_7 lzo1b_8 lzo1b_9 lzo1b_99 lzo1b_999 lzo2a_999; do ./dd_rescue -qATL ./libddr_lzo.so=algo=$$alg:benchmark dd_rescue dd_rescue.lzo || exit 1; $(LZOP) -lt dd_rescue.lzo; ./dd_rescue -qATL ./libddr_lzo.so=benchmark dd_rescue.lzo dd_rescue.cmp || exit 2; cmp dd_rescue dd_rescue.cmp || exit 3; done
