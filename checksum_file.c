@@ -60,6 +60,7 @@ off_t find_chks(FILE* f, const char* nm, char* res, int wantedln)
 {
 	char *lnbf = NULL;
 	size_t lln = 0;
+	//size_t read = 0;
 	char* bnm = basename((char*)nm);
 	while (!feof_unlocked(f)) {
 		char *fnm, *fwh;
@@ -67,6 +68,13 @@ off_t find_chks(FILE* f, const char* nm, char* res, int wantedln)
 		ssize_t n = getline(&lnbf, &lln, f);
 		if (n <= 0)
 			break;
+		/* For non-seekable files, track position to avoid returning pos == -1 */
+		/*
+		if (pos < 0) {
+			pos = read;
+		       	read += n;
+		}
+		 */
 		fwh = strchr(lnbf, ' ');
 		if (!fwh)
 			continue;
@@ -101,9 +109,12 @@ FILE* fopen_chks(const char* fnm, const char* mode, int acc)
 {
 	if (!fnm)
 		return NULL;
-	if (!strcmp("-", fnm))
-		return stdin;
-	else {
+	if (!strcmp("-", fnm)) {
+		if (!strcmp(mode, "w"))
+			return stdout;
+		else
+			return stdin;
+	} else {
 		if (acc) {
 			int fd;
 			if (strcmp(mode, "w"))
@@ -118,23 +129,33 @@ FILE* fopen_chks(const char* fnm, const char* mode, int acc)
 /* get chksum */
 int get_chks(const char* cnm, const char* nm, char* chks, int wantedln)
 {
-	FILE *f = fopen_chks(cnm, "r", 0);
+	FILE *f;
+	char is_stdin = 0;
+       	if (strcmp(cnm, "-"))
+		f = fopen_chks(cnm, "r", 0);
+	else {
+		f = stdin;
+		is_stdin = 1;
+	}
 	if (!f)
 		return -1;
 	off_t err = find_chks(f, nm, chks, wantedln);
-	if (f != stdin)
+	if (!is_stdin)
 		fclose(f);
-	return err < 0? err: 0;
+	//return err < 0? err: 0;
+	return err == -ENOENT? err: 0;
 }
 
 /* update chksum */
 int upd_chks(const char* cnm, const char *nm, const char *chks, int acc)
 {
 	errno = 0;
-	FILE *f = fopen_chks(cnm, "r+", 0);
+	FILE *f = NULL;
 	int err = 0;
 	char oldchks[MAXHASHSLN+2];
 	char* bnm = basename(nm);
+	if (strcmp(cnm, "-"))
+	       f = fopen_chks(cnm, "r+", 0);
 	if (!f) {
 		errno = 0;
 		f = fopen_chks(cnm, "w", acc);
@@ -159,7 +180,8 @@ int upd_chks(const char* cnm, const char *nm, const char *chks, int acc)
 			}
 		}
 	}
-	fclose(f);
+	if (f != stdout)
+		fclose(f);
 	return err;
 }
 

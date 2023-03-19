@@ -30,7 +30,7 @@ typedef struct _aes_rkeys {
 typedef unsigned char uchar;
 typedef unsigned int uint;
 typedef unsigned long ulong;
-
+//typedef unsigned long ulong_alias __attribute__((may_alias));
 
 #define STP_ECB 0
 #define STP_CBC 1
@@ -82,8 +82,8 @@ typedef struct _ciph_desc {
 #define XORN(in1,in2,out,len)	\
 do {				\
 	uint _i;		\
-	for (_i = 0; _i < len/sizeof(ulong); ++_i)	\
-		*((ulong*)(out)+_i) = *((ulong*)(in1)+_i) ^ *((ulong*)(in2)+_i);	\
+	for (_i = 0; _i < len/sizeof(uint); ++_i)	\
+		*((uint*)(out)+_i) = *((const uint*)(in1)+_i) ^ *((const uint*)(in2)+_i);	\
 } while(0)
 
 /* Generic functions */

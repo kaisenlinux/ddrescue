@@ -2,7 +2,7 @@
 # (c) garloff@suse.de, 99/10/09, GNU GPL
 # (c) kurt@garloff.de, 2010 -- 2021, GNU GPL v2 or v3
 
-VERSION = 1.99.12
+VERSION = 1.99.13
 
 DESTDIR = 
 SRCDIR ?= .
@@ -46,6 +46,7 @@ PIE = -fPIE
 LDPIE = -pie
 RDYNAMIC = -rdynamic
 MAKE := $(MAKE) -f $(SRCDIR)/Makefile
+STRIP ?= strip
 
 LZOP = $(shell type -p lzop || type -P true)
 HAVE_SHA256SUM = $(shell type -p sha256sum >/dev/null && echo 1 || echo 0)
@@ -270,6 +271,9 @@ sha1.po: $(SRCDIR)/sha1.c
 aes_c.po: $(SRCDIR)/aes_c.c
 	$(CC) $(CFLAGS_OPT) $(PIC) -o $@ -c $<
 
+aes.po: $(SRCDIR)/aes.c
+	$(CC) $(CFLAGS) -O2 $(PIC) -o $@ -c $<
+
 # Default rules
 %.o: $(SRCDIR)/%.c config.h
 	$(CC) $(CFLAGS) $(DEFINES) $(PIE) -c $<
@@ -401,10 +405,10 @@ static: $(SRCDIR)/dd_rescue.c $(DDR_HEADERS) $(OBJECTS)
 
 # Special pseudo targets
 strip: $(TARGETS) $(LIBTARGETS)
-	strip -S $^
+	$(STRIP) -S $^
 
 strip-all: $(OTHTARGETS)
-	strip -S $^
+	$(STRIP) -S $^
 
 clean:
 	rm -f $(TARGETS) $(OTHTARGETS) $(OBJECTS) $(OBJECTS2) core test log *.o *.po *.cmp *.enc *.enc.old CHECKSUMS.* SALTS.* KEYS.* IVS.* .dep
@@ -456,6 +460,9 @@ aes_arm32.po: $(SRCDIR)/aes_arm32.c
 
 aes_c.o: $(SRCDIR)/aes_c.c
 	$(CC) $(CFLAGS) $(PIE) $(FULL_UNROLL) -O3 -c $<
+
+aes.o: $(SRCDIR)/aes.c
+	$(CC) $(CFLAGS) $(PIE) -O2 -c $<
 
 aes_ossl.o: $(SRCDIR)/aes_ossl.c $(SRCDIR)/aes_ossl10.c $(SRCDIR)/aes_ossl11.c
 	$(CC) $(CFLAGS) $(PIE) -O3 -c $<
@@ -625,6 +632,7 @@ check_sha2: $(TARGETS) sha224 sha384
 	$(VG) ./sha256 /dev/null | sha256sum -c
 	$(VG) ./sha384 /dev/null | sha384sum -c
 	$(VG) ./sha512 /dev/null | sha512sum -c
+	$(VG) ./dd_rescue -q -c0 -a -b16k -t -L ./libddr_hash.so=sha256:outnm=- TEST2 /dev/null | $(VG) ./dd_rescue -c0 -a -b16k -t -L ./libddr_hash.so=sha256:chknm=- TEST2 /dev/null
 	rm -f HASH.TEST CHECKSUMS.sha256 CHECKSUMS.sha512 TEST2
 
 check_lzo: $(TARGETS)
