@@ -8,7 +8,7 @@ PLAT = $(ASDK)/platforms/android-16/arch-arm/usr
 INCD = $(PLAT)/include
 LIBD = $(PLAT)/lib
 
-CFLG = -I $(INCD) -D__WORDSIZE=32 -Wno-unused -std=gnu11 -L$(LIBD)
+CFLG = -I $(INCD) -D__WORDSIZE=32 -Wno-unused -std=gnu11 -L $(LIBD)
 ATTR = $(shell ls $(LIBD)/libattr.a)
 
 DEPS = $(wildcard *.c *.h)
@@ -18,7 +18,7 @@ PATH = $(shell echo $$PATH)
 .PHONY: config libfalloc libfalloc-static libfalloc-dl nolib nocolor static strip all clean check test
 
 default: config.h $(DEPS)
-	$(MAKE) $(MAKEFLAGS) -f Makefile PATH=$(CBIN):$(PATH) CC="$(CC) $(CFLG)" LD="$(CC) -L $(LIBD)" MACH=armv7 EXTRA_LDFLAGS="$(ATTR)" NO_ALIGNED_ALLOC=1 $@
+	$(MAKE) $(MAKEFLAGS) -f Makefile PATH=$(CBIN):$(PATH) CC="$(CC) $(CFLG)" LD="$(CC) -L $(LIBD)" MACH=armv7 IGNORE_TARGET=1 EXTRA_LDFLAGS="$(ATTR)" NO_ALIGNED_ALLOC=1 SHAFLAGS="-mfloat-abi=softfp" $@
 
 config.h: crtbegin_so.o config.h.in configure
 	PATH=$(CBIN):$(PATH) CC="$(CC) $(CFLG)" LD="$(CC) -L $(LIBD)" ./configure --host x86-64-linux-gnu
@@ -41,10 +41,10 @@ config:
 	$(MAKE) -f Makefile.android.arm32pie config.h
 
 dd_rescue libfalloc libfalloc-static libfalloc-dl nolib nocolor static strip check test find_nonzero test_aes all: config.h $(DEPS)
-	$(MAKE) $(MAKEFLAGS) -f Makefile PATH=$(CBIN):$(PATH) CC="$(CC) $(CFLG)" LD="$(CC) -L $(LIBD)" MACH=armv7 EXTRA_LDFLAGS="$(ATTR)" NO_ALIGNED_ALLOC=1 $@
+	$(MAKE) $(MAKEFLAGS) -f Makefile PATH=$(CBIN):$(PATH) CC="$(CC) $(CFLG)" LD="$(CC) -L $(LIBD)" MACH=armv7 IGNORE_TARGET=1 EXTRA_LDFLAGS="$(ATTR)" NO_ALIGNED_ALLOC=1 SHAFLAGS="-mfloat-abi=softfp" $@
 
 clean:
-	$(MAKE) -f Makefile PATH=$(CBIN):$(PATH) CC="$(CC) $(CFLG)" LD="$(CC) -L $(LIBD)" MACH=armv7 $@
+	$(MAKE) -f Makefile PATH=$(CBIN):$(PATH) CC="$(CC) $(CFLG)" LD="$(CC) -L $(LIBD)" MACH=armv7 IGNORE_TARGET=1 $@
 	rm -f config.h crtbegin_dynamic.o crtbegin_static.o crtend_android.o crtend_so.o crtbegin_so.o
 
 TGT = dd_rescue libddr_null.so libddr_lzo.so libddr_hash.so libddr_crypt.so

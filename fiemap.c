@@ -5,6 +5,7 @@
  * sanity checks.
  */
 
+#define _LARGEFILE64_SOURCE 1
 #define _LARGEFILE_SOURCE 1
 #define _FILE_OFFSET_BITS 64
 #define _GNU_SOURCE 1
@@ -27,9 +28,10 @@
 
 #include <signal.h>
 
-#ifdef __BIONIC__
-# include <libgen.h>
+#ifdef HAVE_SYS_REG_H
+# include <sys/reg.h>
 #endif
+
 
 #ifndef FIFREEZE
 # define FIFREEZE	_IOWR('X', 119, int)	/* Freeze */
@@ -308,7 +310,7 @@ int64_t partoffset(const char* devnm)
 #else
 	if (ret < 1)
 		return ret;
-	const char* basedevnm = basename(devnm);
+	const char* basedevnm = devnm;
 	char sysdevnm[128];
 	sprintf(sysdevnm, "/sys/block/%s/%s/start", strippart(basedevnm), basedevnm);
 	FILE *f = fopen(sysdevnm, "r");

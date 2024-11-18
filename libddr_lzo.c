@@ -15,11 +15,11 @@
 
 #include "ddr_plugin.h"
 #include "ddr_ctrl.h"
+#include "mybasename.h"
 
 #include <stdlib.h>
 #include <string.h>
 #include <stdint.h>
-#include <libgen.h>
 #include <unistd.h>
 #include <string.h>
 #include <assert.h>
@@ -27,7 +27,7 @@
 #include <netinet/in.h>
 #include <sys/stat.h>
 #include <signal.h>
-#ifdef HAVE_LZO_LZO1X_H
+#ifdef HAVE_LZO_LZO1X_H	// avoid breaking on dependency generation
 #include <lzo/lzo1x.h>
 #include <lzo/lzo1y.h>
 #include <lzo/lzo1f.h>
@@ -46,19 +46,6 @@
 #define LL "ll"
 #else
 #error __WORDSIZE unknown
-#endif
-
-#ifdef HAVE_BASENAME
-//char* basename(char*);
-#else
-static char* basename(char *nm)
-{
-	const char* ptr = strrchr(nm, '/');	/* Not on DOS */
-	if (ptr)
-		return ptr+1;
-	else
-		return nm;
-}
 #endif
 
 // TODO: pass at runtime rather than compile time
@@ -235,7 +222,7 @@ void lzo_hdr(header_t* hdr, loff_t hole, lzo_state *state)
 	hdr->flags = htonl(state->flags);
 	hdr->nmlen = NAMELEN;
 	if (hole) {
-		char* bnm = basename((char*)state->opts->iname);
+		const char* bnm = mybasename(state->opts->iname);
 		/* This would abort with -D_FORTIFY_SOURCE=2 
 		sprintf(hdr->name+6, ".%04x.%010lx", state->holeno++, hole);
 		*/
@@ -248,9 +235,9 @@ void lzo_hdr(header_t* hdr, loff_t hole, lzo_state *state)
 		hdr->mtime_low = htonl(hole & 0xffffffff);
 		hdr->mtime_high= htonl(hole >> 32);
 	} else {
-		char* nm = (char*)state->opts->iname;
+		const char* nm = (char*)state->opts->iname;
 		if (strlen(nm) > NAMELEN)
-			nm = basename(nm);
+			nm = mybasename(nm);
 		memcpy(hdr->name, nm, MIN(NAMELEN, strlen(nm)));
 		struct stat stbf;
 		if (nm && 0 == stat(state->opts->iname, &stbf)) {
@@ -422,13 +409,15 @@ int lzo_plug_init(void **stat, char* param, int seq, const opt_t *opt)
 		char* next = strchr(param, ':');
 		if (next)
 			*next++ = 0;
+		size_t length = strlen(param);
+
 		if (!strcmp(param, "help"))
 			FPLOG(INFO, "%s", lzo_help);
-		else if (!memcmp(param, "compr", 5))
+		else if (length >= 5 && !memcmp(param, "compr", 5))
 			state->mode = COMPRESS;
-		else if (!memcmp(param, "decom", 5))
+		else if (length >= 5 && !memcmp(param, "decom", 5))
 			state->mode = DECOMPRESS;
-		else if (!memcmp(param, "bench", 5))
+		else if (length >= 5 && !memcmp(param, "bench", 5))
 			state->do_bench = 1;
 		else if (!strcmp(param, "search"))
 			state->do_search = 1;
@@ -436,17 +425,17 @@ int lzo_plug_init(void **stat, char* param, int seq, const opt_t *opt)
 			state->debug = 1;
 		else if (!strcmp(param, "crc32"))
 			state->flags = (state->flags | F_H_CRC32 | F_CRC32_C | F_CRC32_D) & ~(F_ADLER32_C | F_ADLER32_D);
-		else if (!memcmp(param, "opt", 3))
+		else if (length >= 3 && !memcmp(param, "opt", 3))
 			state->do_opt = 1;
-		else if (!memcmp(param, "nodisc", 6))
+		else if (length >= 6 && !memcmp(param, "nodisc", 6))
 			state->nodiscard = 1;
-		else if (!memcmp(param, "algo=", 5))
+		else if (length >= 5 && !memcmp(param, "algo=", 5))
 			err += choose_alg(param+5, state);
-		else if (!memcmp(param, "alg=", 4))
+		else if (length >= 4 && !memcmp(param, "alg=", 4))
 			err += choose_alg(param+4, state);
-		else if (!memcmp(param, "algorithm=", 10))
+		else if (length >= 10 && !memcmp(param, "algorithm=", 10))
 			err += choose_alg(param+10, state);
-		else if (!memcmp(param, "flags=", 6)) {
+		else if (length >= 6 && !memcmp(param, "flags=", 6)) {
 			state->flags = strtol(param+6, NULL, 0);
 			/* TODO Sanity check for flags ... */
 			//FPLOG(INFO, "Flags: %08x\n", state->flags);
@@ -1396,8 +1385,8 @@ int lzo_close(loff_t ooff, void **stat)
 					state->nr_realloc, state->dbuflen/1024,
 					state->nr_memmove, state->nr_cheapmemmove);
 		}
-		/* Only output if it took us more than 0.05s, otherwise it's completely meaningless */
-		if (state->do_bench && state->cpu/(CLOCKS_PER_SEC/20) > 0)
+		/* Only output if it took us more than 0.01s, otherwise it's completely meaningless */
+		if (state->do_bench && state->cpu/(CLOCKS_PER_SEC/100) > 0)
 			FPLOG(INFO, "%.2fs CPU time, %.1fMiB/s\n",
 				(double)state->cpu/CLOCKS_PER_SEC, 
 				state->unc_ln/1024 / (state->cpu/(CLOCKS_PER_SEC/1024.0)));

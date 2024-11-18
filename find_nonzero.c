@@ -12,51 +12,6 @@
 
 #include <stdio.h>
 
-#define mem_clobber	asm("":::"memory")
-
-char cap_str[64];
-char FNZ_OPT[64];
-
-ARCH_DECLS
-
-#include <signal.h>
-#include <setjmp.h>
-static jmp_buf sigill_jmp;
-static void ill_handler(int sig)
-{
-	/* As we can't return from handler (as it would result in 
-	 * reexecuting the illegal instruction again - we jump back
-	 * using longjmp) -- we have to restore signal delivery, so the
-	 * program context is back to normal. Otherwise a second
-	 * probe_procedure would not handle SIGILL. */
-	sigset_t sigmask;
-	sigemptyset(&sigmask); sigaddset(&sigmask, sig);
-	sigprocmask(SIG_UNBLOCK, &sigmask, NULL);
-	longjmp(sigill_jmp, 1);
-}
-
-char probe_procedure(void (*probefn)(void))
-{
-	/*static*/ sig_atomic_t have_feature;
-	signal(SIGILL, ill_handler);
-	if (setjmp(sigill_jmp) == 0) {
-		probefn();
-		mem_clobber;
-		have_feature = 1;
-	} else {
-		have_feature = 0;
-	}
-	signal(SIGILL, SIG_DFL);
-	return have_feature;
-}
-
-void detect_cpu_cap()
-{
-	*cap_str = 0;
-	ARCH_DETECT;
-	sprintf(FNZ_OPT, "find_nonzero_%s", OPT_STR2);
-}
-
 #if defined(TEST) && (defined(__i386__) || defined(__x86_64__))
 /** Just for testing the speed of the good old x86 string instructions */
 size_t find_nonzero_rep(const unsigned char* blk, const size_t ln)

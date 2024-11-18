@@ -3,7 +3,12 @@
 #ifndef _FMT_NO_H
 #define _FMT_NO_H
 
+#define _GNU_SOURCE 1
 #include <sys/types.h>
+#ifdef HAVE_FCNTL_H
+#include <fcntl.h>
+#endif
+
 char* fmt_int_b(unsigned char pre, unsigned char post, unsigned int scale,
 		loff_t no, const char* bold, const int blen,
 		const char* norm, const int nlen,

@@ -26,14 +26,6 @@ int myffsl_sse42(unsigned long val)
 
 }
 
-#include <unistd.h>
-volatile unsigned _probe_sse42_res;
-void probe_sse42()
-{
-	unsigned int val = getpid();
-	_probe_sse42_res = _mm_popcnt_u32(val);
-}
-
 #else 
 # warning compile ffs_sse42 with -msse4.2
 #endif

@@ -10,6 +10,12 @@
 # include "config.h"
 #endif
 
+#ifdef HAVE_ALIGNED_ATTR
+#define ALIGNED(x) __attribute__((aligned(x)))
+#else
+#define ALIGNED(x)
+#endif
+
 typedef union _roundkey {
 	unsigned char data[16];
 	unsigned int data32[4];
@@ -57,7 +63,7 @@ typedef struct _sec_fields {
 	/* @3776 canary */
 	unsigned long long canary;
 	
-} sec_fields;
+} ALIGNED(64) sec_fields;
 
 sec_fields* secmem_init();
 void secmem_release(sec_fields*);

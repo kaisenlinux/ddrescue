@@ -21,10 +21,17 @@
 #include <unistd.h>
 
 /*
+ * Initialize array of round constants (each used 20x)
+ */
+static const
+uint32_t k[] ALIGNED(64) = { 0x5a827999, 0x6ed9eba1, 0x8f1bbcdc, 0xca62c1d6 };
+
+/*
  * Initialize hash values: (first 32 bits of the fractional parts of the square roots of the first 8 primes 2..19): 
  */
 void sha1_init(hash_t *ctx)
 {
+	__builtin_prefetch(k, 0, 3);
 	memset((uint8_t*)ctx, 0, sizeof(hash_t));
 	ctx->sha1_h[0] = 0x67452301;
 	ctx->sha1_h[1] = 0xefcdab89;
@@ -42,17 +49,11 @@ static inline uint32_t to_int32_be(const uint8_t *bytes)
 }
 #endif
 
-/* 
- * Initialize array of round constants (each used 20x)
- */
-static const
-uint32_t k[] = { 0x5a827999, 0x6ed9eba1, 0x8f1bbcdc, 0xca62c1d6 };
-
 #define  LEFTROTATE(x, c) (((x) << (c)) | ((x) >> (32 - (c))))
 #define RIGHTROTATE(x, c) (((x) >> (c)) | ((x) << (32 - (c))))
 
 // Implicit: f, w[], i
-#define SHA1_SWAP(a,b,c,d,e,k)	\
+#define SHA1_SWAP(a,b,c,d,e,f,k,_temp)	\
 	const uint32_t _temp = LEFTROTATE(a, 5) + f + e + k + w[i];	\
 	e = d; d = c;		\
 	c = RIGHTROTATE(b, 2);	\
@@ -63,11 +64,11 @@ uint32_t k[] = { 0x5a827999, 0x6ed9eba1, 0x8f1bbcdc, 0xca62c1d6 };
  * break message into 512-bit chunks 
  * (The initial values in w[0..63] don't matter, so many implementations zero them here) 
  */
-void sha1_64(const uint8_t* msg, hash_t* ctx)
+static inline void __sha1_64(const uint8_t* msg, hash_t* ctx, const char clear)
 {
 	int i;
  	/* for each chunk create a 80-entry message schedule array w[0..79] of 32-bit words */
-	uint32_t w[80];
+	uint32_t w[80] ALIGNED(64);
  	/* copy chunk into first 16 words w[0..15] of the message schedule array */
 #if 0
 	memcpy(w, msg, 64);
@@ -92,24 +93,47 @@ void sha1_64(const uint8_t* msg, hash_t* ctx)
 	/* Compression function main loops: */
 	for (i = 0; i < 20; ++i) {
 		const uint32_t f = d ^ (b & (c ^ d));
-		SHA1_SWAP(a,b,c,d,e,k[0]);
+		SHA1_SWAP(a,b,c,d,e,f,k[0],tmp);
+		++i;
+		const uint32_t f_ = d ^ (b & (c ^ d));
+		SHA1_SWAP(a,b,c,d,e,f_,k[0],tmp_);
 	}
 	for (; i < 40; ++i) {
 		const uint32_t f = b ^ c ^ d;
-		SHA1_SWAP(a,b,c,d,e,k[1]);
+		SHA1_SWAP(a,b,c,d,e,f,k[1],tmp);
+		++i;
+		const uint32_t f_ = b ^ c ^ d;
+		SHA1_SWAP(a,b,c,d,e,f_,k[1],tmp_);
 	}
 	for (; i < 60; ++i) {
 		const uint32_t f = (b & c) | (d & (b | c));
-		SHA1_SWAP(a,b,c,d,e,k[2]);
+		SHA1_SWAP(a,b,c,d,e,f,k[2],tmp);
+		++i;
+		const uint32_t f_ = (b & c) | (d & (b | c));
+		SHA1_SWAP(a,b,c,d,e,f_,k[2],tmp_);
 	}
 	for (; i < 80; ++i) {
 		const uint32_t f = b ^ c ^ d;
-		SHA1_SWAP(a,b,c,d,e,k[3]);
+		SHA1_SWAP(a,b,c,d,e,f,k[3],tmp);
+		++i;
+		const uint32_t f_ = b ^ c ^ d;
+		SHA1_SWAP(a,b,c,d,e,f_,k[3],tmp_);
 	}
 
+	/* Clear buf */
+	if (clear) {
+		memset(w, 0, sizeof(w));
+		asm(""::"r"(w):"0");
+	}
 	/* Add the compressed chunk to the current hash value: */
 	ctx->sha1_h[0] += a; ctx->sha1_h[1] += b; ctx->sha1_h[2] += c;
        	ctx->sha1_h[3] += d; ctx->sha1_h[4] += e;
+}
+
+
+void sha1_64(const uint8_t* msg, hash_t* ctx)
+{
+	__sha1_64(msg, ctx, 0);
 }
 
 static char _sha1_res[41];
@@ -163,6 +187,12 @@ static void output(unsigned char* ptr, int ln)
  */
 void sha1_calc(const uint8_t *ptr, size_t chunk_ln, size_t final_len, hash_t *ctx)
 {
+	__builtin_prefetch(ptr, 0, 2);
+	__builtin_prefetch(ptr+64, 0, 2);
+	__builtin_prefetch(ptr+128, 0, 2);
+	__builtin_prefetch(ptr+192, 0, 2);
+	/* ctx and k should be cache-hot already */
+	//__builtin_prefetch(ctx->md5_h, 0, 3);
 	size_t offset;
 	for (offset = 0; offset+64 <= chunk_ln; offset += 64)
 		sha1_64(ptr + offset, ctx);
@@ -186,7 +216,7 @@ void sha1_calc(const uint8_t *ptr, size_t chunk_ln, size_t final_len, hash_t *ct
 	}
 	*(uint32_t*)(sha1_buf+56) = htonl(final_len >> 29);
 	*(uint32_t*)(sha1_buf+60) = htonl(final_len <<  3);
-	sha1_64(sha1_buf, ctx);
+	__sha1_64(sha1_buf, ctx, 1);
 }
 
 #ifdef SHA1_MAIN

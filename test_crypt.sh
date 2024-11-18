@@ -3,16 +3,28 @@
 
 enc_dec_compare_noxit()
 {
-	file=$1; alg=$2; keyargs=$3
+	file=$1; alg=$2; 
+	if test -n "$3"; then keyargs=":$3"; else unset keyargs; fi
 	if test -n "$4"; then othargs=":$4"; else unset othargs; fi
 	if test -n "$5"; then eng=":engine=$5"; else unset eng; fi
 	if test -n "$6"; then opt="$6"; else opt="-qptA"; fi
 	echo "#Validating enc/decryption $eng $alg $othargs"
 	cp -p $file.enc $file.enc.old 2>/dev/null
 	echo $VG ./dd_rescue $opt -L ./libddr_crypt.so=enc$eng:weakrnd:alg=$alg:$keyargs$othargs $file $file.enc 
-	$VG ./dd_rescue $opt -L ./libddr_crypt.so=enc$eng:weakrnd:alg=$alg:$keyargs$othargs $file $file.enc || return 1
-	echo $VG ./dd_rescue $opt -L ./libddr_crypt.so=dec$eng:weakrnd:alg=$alg$othargs $file.enc $file.cmp 
-	$VG ./dd_rescue $opt -L ./libddr_crypt.so=dec$eng:weakrnd:alg=$alg$othargs $file.enc $file.cmp || return 2
+	if test -n "$7"; then
+		echo echo $7 \| $VG ./dd_rescue $opt -L ./libddr_crypt.so=enc$eng:weakrnd:alg=$alg$keyargs$othargs $file $file.enc 
+		echo "$7" | $VG ./dd_rescue $opt -L ./libddr_crypt.so=enc$eng:weakrnd:alg=$alg$keyargs$othargs $file $file.enc || return 1
+	else
+		echo $VG ./dd_rescue $opt -L ./libddr_crypt.so=enc$eng:weakrnd:alg=$alg$keyargs$othargs $file $file.enc 
+		$VG ./dd_rescue $opt -L ./libddr_crypt.so=enc$eng:weakrnd:alg=$alg$keyargs$othargs $file $file.enc || return 1
+	fi
+	if test -n "$7"; then
+		echo echo $7 \| $VG ./dd_rescue $opt -L ./libddr_crypt.so=dec$eng:weakrnd:alg=$alg$othargs $file.enc $file.cmp 
+		echo "$7" | $VG ./dd_rescue $opt -L ./libddr_crypt.so=dec$eng:weakrnd:alg=$alg$othargs $file.enc $file.cmp || return 2
+	else
+		echo $VG ./dd_rescue $opt -L ./libddr_crypt.so=dec$eng:weakrnd:alg=$alg$othargs $file.enc $file.cmp 
+		$VG ./dd_rescue $opt -L ./libddr_crypt.so=dec$eng:weakrnd:alg=$alg$othargs $file.enc $file.cmp || return 2
+	fi
 	cmp $file $file.cmp || return 3
 }
 
@@ -31,7 +43,7 @@ enc_dec_compare()
 
 enc_dec_compare_keys()
 {
-	enc_dec_compare "$1" "$2" "$3" "$4:keysfile:ivsfile" "$5" "$6"
+	enc_dec_compare "$1" "$2" "$3" "$4:keysfile:ivsfile" "$5" "$6" "$7"
 }
 
 run_ddr()
@@ -53,7 +65,7 @@ fi
 echo "#We will eat a lot of entropy ... hopefully you have some left afterwards!"
 
 # MAIN TEST
-if test -e test_aes; then
+if test -e test_aes -a -z "$SKIP_MAIN"; then
   LOG=test_aes.log
   #for ALG in $TESTALGS; do echo $VG ./test_aes $ALG 10000; $VG ./test_aes $ALG 10000 >$LOG 2>&1; if test $? != 0; then cat $LOG; echo "ERROR"; exit 1; fi; done
   #rm $LOG
@@ -64,12 +76,16 @@ if test -e test_aes; then
   done
   rm $LOG
 fi
+# Pass passphrase via pipe
+echo "# *** pass via pbkf2, pipe ***"
+enc_dec_compare dd_rescue AES192-CTR "" "pbkdf2:passfd=0" "" "-qptA" "password"
 # Reverse (CTR, ECB)
 echo "# *** Reverse ***"
 enc_dec_compare_keys dd_rescue AES192-CTR keygen:ivgen "" "" "-qptAr"
 enc_dec_compare_keys dd_rescue AES192-ECB keygen:ivgen "" "" "-qptAr"
 # Appending (CTR, ECB only when block-aligned)
 enc_dec_compare_keys dd_rescue AES192-CTR
+# This one fails on musl/clang if the size of the dd_rescue binary is not a multiple of 16 (crypt blk size)
 run_ddr -qAx -L ./libddr_crypt.so=enc:weakrnd:alg=AES192-CTR:keysfile:ivsfile dd_rescue dd_rescue.enc || exit 1
 cat dd_rescue dd_rescue > dd_rescue2
 run_ddr -qAp -L ./libddr_crypt.so=dec:weakrnd:alg=AES192-CTR:keysfile:ivsfile dd_rescue.enc dd_rescue.cmp || exit 2
@@ -100,7 +116,7 @@ cmp dd_rescue3.cmp2 dd_rescue3.cmp3 || exit 4
 #exit 1
 
 # Chain with lzo, hash (all)
-if test "$HAVE_LZO" = "1"; then
+if test -n "$HAVE_LZO"; then
 echo "# *** Plugin chains ... ***"
 SHA256SUM=`type -p sha256sum`
 run_ddr -pqt -L ./libddr_hash.so=sha256:outnm=,./libddr_lzo.so=compr,./libddr_hash.so=sha256:output,./libddr_crypt.so=enc:AES192-CTR:keygen:ivgen:weakrnd:keysfile:ivsfile,./libddr_hash.so=sha256:outnm= dd_rescue3 dd_rescue3.enc || exit 1
@@ -115,6 +131,27 @@ sha256sum -c CHECKSUMS.sha256 || exit 4
 fi
 cmp dd_rescue3.cmp dd_rescue3 || exit 3
 cat CHECKSUMS.sha256
+ls -lAF dd_rescue3*
+else
+echo "# *** SKIP Plugin chains...  ***"
+fi
+
+# Chain with lzo, hash sha512 (all)
+if test -n "$HAVE_LZO"; then
+echo "# *** Plugin chains ... ***"
+SHA512SUM=`type -p sha512sum`
+run_ddr -pqt -L ./libddr_hash.so=sha512:outnm=,./libddr_lzo.so=compr,./libddr_hash.so=sha512:output,./libddr_crypt.so=enc:AES192-CTR:keygen:ivgen:weakrnd:keysfile:ivsfile,./libddr_hash.so=sha512:outnm= dd_rescue3 dd_rescue3.enc || exit 1
+if test -n "$SHA512SUM"; then
+sha512sum -c CHECKSUMS.sha512 || exit 4
+else
+echo "WARNING: Cant run sha512sum, binary not found"
+fi
+run_ddr -pqt -L ./libddr_hash.so=sha512:chknm,./libddr_crypt.so=AES192-CTR:weakrnd:dec:keysfile:ivsfile,./libddr_lzo.so=decompr,./libddr_hash.so=sha512:outnm dd_rescue3.enc dd_rescue3.cmp
+if test -n "$SHA6512SUM"; then
+sha512sum -c CHECKSUMS.sha512 || exit 4
+fi
+cmp dd_rescue3.cmp dd_rescue3 || exit 3
+cat CHECKSUMS.sha512
 ls -lAF dd_rescue3*
 fi
 rm -f dd_rescue3 dd_rescue3.enc dd_rescue3.enc.old dd_rescue3.cmp dd_rescue3.cmp2 dd_rescue3.cmp3
@@ -223,6 +260,7 @@ fi
 HAVE_AESNI=`grep " sse4" /proc/cpuinfo 2>/dev/null | grep " aes " 2>/dev/null`
 HAVE_AESARM=`grep " pmull " /proc/cpuinfo 2>/dev/null`
 HAVE_LIBCRYPTO=`grep 'HAVE_LIBCRYPTO 1' config.h 2>/dev/null`
+#HAVE_LZO=`grep 'HAVE_LIBLZO2 1' config.h 2>/dev/null`
 if test -n "$TESTALGS"; then
   echo "# *** Engines comparison ***"
 fi

@@ -5,10 +5,15 @@
 #include "config.h"
 #endif
 
+#define _GNU_SOURCE 1
 #include <stdint.h>
 #include <sys/types.h>
 
-#ifdef __GNUC__
+#ifdef HAVE_ENDIAN_H
+#include <endian.h>
+#endif
+
+#ifdef HAVE_ALIGNED_ATTR
 #define ALIGNED(x) __attribute__((aligned(x)))
 #else
 #define ALIGNED(x)
@@ -23,7 +28,7 @@ typedef struct {
 		uint64_t sha512_h[8];
 		//uint64_t sha3_h[25];
 	};
-} hash_t ALIGNED(32);
+} hash_t ALIGNED(64);
 
 typedef void (hash_init_fn)(hash_t*);
 typedef void (hash_block_fn)(const uint8_t* ptr, hash_t*);

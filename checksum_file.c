@@ -25,10 +25,7 @@
 #include <fcntl.h>
 
 #include "hash.h"
-
-#ifdef __BIONIC__
-#include <libgen.h>
-#endif
+#include "mybasename.h"
 
 #ifndef HAVE_FEOF_UNLOCKED
 #define feof_unlocked(x) feof(x)
@@ -61,7 +58,7 @@ off_t find_chks(FILE* f, const char* nm, char* res, int wantedln)
 	char *lnbf = NULL;
 	size_t lln = 0;
 	//size_t read = 0;
-	char* bnm = basename((char*)nm);
+	const char* bnm = mybasename(nm);
 	while (!feof_unlocked(f)) {
 		char *fnm, *fwh;
 		off_t pos = ftello(f);
@@ -153,7 +150,7 @@ int upd_chks(const char* cnm, const char *nm, const char *chks, int acc)
 	FILE *f = NULL;
 	int err = 0;
 	char oldchks[MAXHASHSLN+2];
-	char* bnm = basename(nm);
+	const char* bnm = mybasename(nm);
 	if (strcmp(cnm, "-"))
 	       f = fopen_chks(cnm, "r+", 0);
 	if (!f) {

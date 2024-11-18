@@ -7,6 +7,7 @@
 #include <string.h>
 #include <stdlib.h>
 #include <stdio.h>
+#include <stddef.h>
 #include <unistd.h>
 #include <errno.h>
 #include <sys/mman.h>

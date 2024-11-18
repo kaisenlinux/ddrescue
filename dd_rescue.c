@@ -68,7 +68,8 @@
 #ifndef _GNU_SOURCE
 # define _GNU_SOURCE 1
 #endif
-#define _LARGEFILE_SOURCE
+#define _LARGEFILE_SOURCE 1
+#define _LARGEFILE64_SOURCE 1
 #define _FILE_OFFSET_BITS 64
 
 #ifdef TEST_SYSCALL
@@ -108,7 +109,6 @@
 #include <limits.h>
 #include <sys/time.h>
 #include <sys/stat.h>
-#include <libgen.h>
 #include <assert.h>
 
 #include "random.h"
@@ -121,6 +121,7 @@
 
 #include "ddr_plugin.h"
 #include "ddr_ctrl.h"
+#include "mybasename.h"
 
 #ifdef HAVE_GETOPT_LONG
 #include <getopt.h>
@@ -128,6 +129,10 @@
 
 #ifdef HAVE_SCHED_H
 #include <sched.h>
+#endif
+
+#ifdef HAVE_LIBGEN_H
+#include <libgen.h>
 #endif
 
 #ifdef NO_LIBFALLOCATE
@@ -478,7 +483,7 @@ void call_plugins_open(opt_t *op, fstate_t *fst)
 
 int call_plugins_close(opt_t *op, fstate_t *fst)
 {
-	int errs = 0;
+	//int errs = 0;
 	int maxerr = 0;
 	int seq = 0;
 	if (!plugins_opened)
@@ -490,7 +495,7 @@ int call_plugins_close(opt_t *op, fstate_t *fst)
 			if (err) {
 				fplog(stderr, WARN, "Plugin %s(%i) reported error on close: %s!\n",
 					LISTDATA(plug).name, seq, strerror(-err));
-				++errs;
+				//++errs;
 				if (-err > maxerr)
 					maxerr = -err;
 			}
@@ -1066,6 +1071,7 @@ static void do_fallocate(int fd, const char* onm, opt_t *op, fstate_t *fst)
 
 float floatrate4  = 0.0;
 float floatrate32 = 0.0;
+float maxrate = 0.0;
 void doprint(FILE* const file, const unsigned int bs, const clock_t cl, 
 	     const float t1, const float t2, const int sync,
 	     opt_t *op, fstate_t *fst, progress_t *prg, dpopt_t *dop)
@@ -1080,6 +1086,8 @@ void doprint(FILE* const file, const unsigned int bs, const clock_t cl,
 		floatrate4  = (floatrate4 * 3 + currate)/ 4;
 		floatrate32 = (floatrate32*31 + currate)/32;
 	}
+	if (floatrate4 > maxrate)
+		maxrate = floatrate4;
 	if (nocol || (file != stderr && file != stdout)) {
 		bold = ""; norm = "";
 	}
@@ -1199,7 +1207,9 @@ void printstatus(FILE* const file1, FILE* const file2,
 	}
 	/* Idea: Could save last not printed status and print on err */
 	if (t2 < printint && !sync && !in_report) {
-		if (fst->estxfer)
+		/* We need to update more than 10x per second if copy time
+		 * is less than 8s resulting in a file size of 8*maxrate */
+		if (fst->estxfer && (!maxrate || fst->estxfer < maxrate*8))
 			updgraph(0, fst, dop, op);
 		return;
 	}
@@ -1466,7 +1476,7 @@ int real_cleanup(opt_t *op, fstate_t *fst, progress_t *prg,
 		copyxattr(op->iname, op->oname);
 		copytimes(op->iname, op->oname);
 	}
-	if (op->rmvtrim)
+	if (op->rmvtrim && op->oname)
 		remove_and_trim(op->oname, op);
 	LISTFOREACH(ofiles, of) {
 		if (op->preserve) {
@@ -1631,22 +1641,24 @@ static inline ssize_t mypread(int fd, void* bf, size_t sz, loff_t off,
 {
 	/* TODO: Handle plugin input here ... */
 	/* Handle fault injection here */
-	int fault = in_fault_list(read_faults, off/op->hardbs,
-				  (off+(loff_t)sz+(loff_t)(op->hardbs-1))/op->hardbs);
-	if (fault) {
-		if (op->verbose)
-			fplog(stderr, DEBUG, "Inject read fault @ %li (rd %iblk @ %li*%i)\n",
-				(long)((fault-1)*op->hardbs+off), (sz+op->hardbs-1)/op->hardbs,
-				off/op->hardbs, op->hardbs);
-		if (!op->reverse && fst->fin_ipos && fst->ipos == fst->fin_ipos) {
-			/* EOF, we can't proceed any further */
-			errno = 0;
-			return 0;
-		} else {
-			errno = EIO;
-			return -1;
+	if (read_faults) {
+		int fault = in_fault_list(read_faults, off/op->hardbs,
+					  (off+(loff_t)sz+(loff_t)(op->hardbs-1))/op->hardbs);
+		if (fault) {
+			if (op->verbose)
+				fplog(stderr, DEBUG, "Inject read fault @ %li (rd %iblk @ %li*%i)\n",
+					(long)((fault-1)*op->hardbs+off), (sz+op->hardbs-1)/op->hardbs,
+					off/op->hardbs, op->hardbs);
+			if (!op->reverse && fst->fin_ipos && fst->ipos == fst->fin_ipos) {
+				/* EOF, we can't proceed any further */
+				errno = 0;
+				return 0;
+			} else {
+				errno = EIO;
+				return -1;
+			}
+			// Cloud read and return (fault-1)*op->hardbs bytes ...
 		}
-		// Cloud read and return (fault-1)*op->hardbs bytes ...
 	}
 	/* Optimization for repeated read from same input */
 	if (op->i_repeat) {
@@ -1683,16 +1695,18 @@ static inline ssize_t mypwrite(int fd, void* bf, size_t sz, loff_t off,
 {
 	/* TODO: Handle plugin output here ... */
 	/* Handle fault injection here */
-	int fault = in_fault_list(write_faults, off/op->hardbs,
-				  (off+(loff_t)sz+(loff_t)(op->hardbs-1))/op->hardbs);
-	if (fault) {
-		if (op->verbose)
-			fplog(stderr, DEBUG, "Inject write fault @ %li (wr %iblk @ %li*%i)\n",
-				(long)((fault-1)*op->hardbs+off), (sz+op->hardbs-1)/op->hardbs,
-				off/op->hardbs, op->hardbs);
-		errno = EIO;
-		return -1;
-		// Cloud write and return (fault-1)*op->hardbs bytes ...
+	if (write_faults) {
+		int fault = in_fault_list(write_faults, off/op->hardbs,
+					  (off+(loff_t)sz+(loff_t)(op->hardbs-1))/op->hardbs);
+		if (fault) {
+			if (op->verbose)
+				fplog(stderr, DEBUG, "Inject write fault @ %li (wr %iblk @ %li*%i)\n",
+					(long)((fault-1)*op->hardbs+off), (sz+op->hardbs-1)/op->hardbs,
+					off/op->hardbs, op->hardbs);
+			errno = EIO;
+			return -1;
+			// Cloud write and return (fault-1)*op->hardbs bytes ...
+		}
 	}
 	/* Continue with real writes */
 	if (fst->o_chr) {
@@ -2135,11 +2149,15 @@ int copyfile_hardbs(const loff_t max, opt_t *op, fstate_t *fst,
 				errs += err;
 		}
 
-		if (op->syncfreq && !(prg->xfer % (op->syncfreq*op->softbs)))
+		errno = 0;
+		/* If we sync regularly, let's print a status update on each sync */
+		if (op->syncfreq && !(fst->ipos % (op->syncfreq*op->softbs/2)))
 			printstatus((op->quiet? 0: stderr), 0, op->hardbs, 1, op, fst, prg, dop);
-		else if (!op->quiet && !(prg->xfer % (updstat*op->softbs)))
+		/* else print regularly acc. to updstat if not quiet */
+		else if (!op->quiet && !(fst->ipos % (updstat*op->softbs/2)))
 			printstatus(stderr, 0, op->hardbs, 0, op, fst, prg, dop);
-		else if (op->quiet && op->maxkbs && !(prg->xfer % (updstat*op->softbs)))
+		/* even if quiet, we need to call the printstatus if we do rate limiting */
+		else if (op->quiet && op->maxkbs && !(fst->ipos % (updstat*op->softbs/2)))
 			printstatus(0, 0, op->hardbs, 0, op, fst, prg, dop);
 	} /* remain */
 	return errs;
@@ -2151,7 +2169,6 @@ int copyfile_softbs(const loff_t max, opt_t *op, fstate_t *fst,
 {
 	ssize_t toread;
 	int errs = 0, rc; int eno;
-	errno = 0;
 #if 0	
 	fprintf(stderr, "%s%s%s%s copyfile (fstate->ipos=%.1fk, progress->xfer=%.1fk, max=%.1fk, bs=%i)                         ##\n%s%s%s%s",
 		up, up, up, up,
@@ -2166,6 +2183,7 @@ int copyfile_softbs(const loff_t max, opt_t *op, fstate_t *fst,
 			fplog(stderr, WARN, "extending file %s to %skiB failed\n",
 			      op->oname, fmt_kiB(fst->opos, !nocol));
 	}
+	errno = 0;
 	while ((toread = blockxfer(max, op->softbs, op, fst, prg)) > 0 && !interrupted) {
 		int err;
 		ssize_t rd = readblock(toread, op, fst, rep, dop, dst);
@@ -2192,7 +2210,7 @@ int copyfile_softbs(const loff_t max, opt_t *op, fstate_t *fst,
 			/* Non fatal error */
 			new_max = prg->xfer + toread;
 			/* Error with large blocks: Try small ones ... */
-			if (op->verbose & eno) {
+			if (op->verbose && eno) {
 				/*
 				fprintf(stderr, DDR_INFO "problems at ipos %.1fk: %s \n                 fall back to smaller blocksize \n%s%s%s%s",
 				        (double)fstate->ipos/1024, strerror(eno), down, down, down, down);
@@ -2245,11 +2263,15 @@ int copyfile_softbs(const loff_t max, opt_t *op, fstate_t *fst,
 				errs += err;
 		} /* errno */
 
-		if (op->syncfreq && !(prg->xfer % (op->syncfreq*op->softbs)))
+		errno = 0;
+		/* If we sync regularly, let's print a status update on each sync */
+		if (op->syncfreq && !(fst->ipos % (op->syncfreq*op->softbs)))
 			printstatus((op->quiet? 0: stderr), 0, op->softbs, 1, op, fst, prg, dop);
-		else if (!op->quiet && !(prg->xfer % (2*updstat*op->softbs)))
+		/* else print regularly acc. to updstat if not quiet */
+		else if (!op->quiet && !(fst->ipos % (2*updstat*op->softbs)))
 			printstatus(stderr, 0, op->softbs, 0, op, fst, prg, dop);
-		else if (op->quiet && op->maxkbs && !(prg->xfer % (2*updstat*op->softbs)))
+		/* even if quiet, we need to call the printstatus if we do rate limiting */
+		else if (op->quiet && op->maxkbs && !(fst->ipos % (2*updstat*op->softbs)))
 			printstatus(0, 0, op->softbs, 0, op, fst, prg, dop);
 	} /* remain */
 	return errs;
@@ -2405,20 +2427,23 @@ int tripleoverwrite(const loff_t max, opt_t *op, fstate_t *fst,
 	return ret;
 }
 
-static loff_t readint(const char* const ptr)
+static loff_t readint(const char* const ptr, const char* delim)
 {
 	char *es; double res;
 
 	res = strtod(ptr, &es);
 	switch (*es) {
+		case 's':
 		case 'b': res *= 512; break;
 		case 'k': res *= 1024; break;
 		case 'M': res *= 1024*1024; break;
 		case 'G': res *= 1024*1024*1024; break;
+		case 'T': res *= 1024*1024*1024*1024ULL; break;
 		case ' ':
 		case '\0': break;
 		default:
-			fplog(stderr, WARN, "suffix %c ignored!\n", *es);
+			if (!delim || !strchr(delim, *es))
+				fplog(stderr, WARN, "suffix %c ignored!\n", *es);
 	}
 	return (loff_t)res;
 }
@@ -2507,12 +2532,18 @@ void printversion()
 #if (defined(__x86_64__) || defined(__i386__)) && !defined(NO_RDRND)
 	if (have_rdrand)
 		fprintf(stderr, "rdrnd ");
-#if 0
-	if (have_aesni)
+	if (have_sha256)
+		fprintf(stderr, "sha ");
+#if 1
+	if (have_vaes)
+		fprintf(stderr, "vaes ");
+	else if (have_aesni)
 		fprintf(stderr, "aes ");
 #endif
 #endif
 #if defined(__aarch64__) || defined(__arm__)
+	if (have_arm8sha)
+		fprintf(stderr, "sha ");
 	if (have_arm8crypto)
 		fprintf(stderr, "aes ");
 #endif
@@ -2719,18 +2750,9 @@ int is_filename(char* arg)
 	return 1;
 }
 
-#ifdef __BIONIC__
-#define strdupa(str)				\
-({						\
-	char* _mem = alloca(strlen(str)+1);	\
- 	strcpy(_mem, str);			\
- 	_mem;					\
- })
-#endif
-
 const char* retstrdupcat3(const char* dir, char dirsep, const char* inm)
 {
-	char* ibase = basename(strdupa(inm));
+	const char* ibase = mybasename(inm);
 	const int dlen = strlen(dir) + (dirsep>0? 1: dirsep);
 	char* ret = (char*)malloc(dlen + strlen(inm) + 1);
 	strcpy(ret, dir);
@@ -2749,7 +2771,7 @@ const char* dirappfile(const char* onm, opt_t *op)
 {
 	size_t oln = strlen(onm);
 	if (!strcmp(onm, ".")) {
-		char* ret = strdup(basename(strdupa(op->iname)));
+		char* ret = strdup(mybasename(op->iname));
 		LISTAPPEND(freenames, ret, charp);
 		return ret;
 	}
@@ -2892,15 +2914,15 @@ char* parse_opts(int argc, char* argv[], opt_t *op, dpopt_t *dop)
 			case 'v': op->quiet = 0; op->verbose = 1; break;
 			case 'q': op->verbose = 0; op->quiet = 1; break;
 			case 'c': op->nocol = !readbool(optarg); nocol = op->nocol; break;
-			case 'C': op->maxkbs = (unsigned int)(readint(optarg)/1024); break;
-			case 'b': op->softbs = (int)readint(optarg); break;
-			case 'B': op->hardbs = (int)readint(optarg); break;
-			case 'm': op->maxxfer = readint(optarg); break;
+			case 'C': op->maxkbs = (unsigned int)(readint(optarg, 0)/1024); break;
+			case 'b': op->softbs = (int)readint(optarg, 0); break;
+			case 'B': op->hardbs = (int)readint(optarg, 0); break;
+			case 'm': op->maxxfer = readint(optarg, 0); break;
 			case 'M': op->noextend = 1; break;
-			case 'e': op->maxerr = (int)readint(optarg); break;
-			case 'y': syncsz = readint(optarg); break;
-			case 's': op->init_ipos = readint(optarg); break;
-			case 'S': op->init_opos = readint(optarg); break;
+			case 'e': op->maxerr = (int)readint(optarg, 0); break;
+			case 'y': syncsz = readint(optarg, 0); break;
+			case 's': op->init_ipos = readint(optarg, 0); break;
+			case 'S': op->init_opos = readint(optarg, 0); break;
 			case 'l': op->lname = optarg;
 				tmpfd = openfile(op->lname, O_WRONLY | O_CREAT | O_APPEND /* O_EXCL */);
 				logfd = fdopen(tmpfd, "a");
@@ -2911,11 +2933,11 @@ char* parse_opts(int argc, char* argv[], opt_t *op, dpopt_t *dop)
 			case 'u': op->rmvtrim = 1; break;
 			case 'F': populate_faultlists(optarg, op); break;
 			case 'Y': do { ofile_t of; of.name = optarg; of.fd = -1; of.cdev = 0; LISTAPPEND(ofiles, of, ofile_t); } while (0); break;
-			case 'z': dop->prng_libc = 1; if (is_filename(optarg)) dop->prng_sfile = optarg; else dop->prng_seed = readint(optarg); break;
-			case 'Z': dop->prng_frnd = 1; if (is_filename(optarg)) dop->prng_sfile = optarg; else dop->prng_seed = readint(optarg); break;
-			case '2': dop->prng_frnd = 1; if (is_filename(optarg)) dop->prng_sfile = optarg; else dop->prng_seed = readint(optarg); dop->bsim715 = 1; dop->bsim715_2 = 1; break;
-			case '3': dop->prng_frnd = 1; if (is_filename(optarg)) dop->prng_sfile = optarg; else dop->prng_seed = readint(optarg); dop->bsim715 = 1; break;
-			case '4': dop->prng_frnd = 1; if (is_filename(optarg)) dop->prng_sfile = optarg; else dop->prng_seed = readint(optarg); dop->bsim715 = 1; dop->bsim715_4 = 1; break;
+			case 'z': dop->prng_libc = 1; if (is_filename(optarg)) dop->prng_sfile = optarg; else dop->prng_seed = readint(optarg, 0); break;
+			case 'Z': dop->prng_frnd = 1; if (is_filename(optarg)) dop->prng_sfile = optarg; else dop->prng_seed = readint(optarg, 0); break;
+			case '2': dop->prng_frnd = 1; if (is_filename(optarg)) dop->prng_sfile = optarg; else dop->prng_seed = readint(optarg, 0); dop->bsim715 = 1; dop->bsim715_2 = 1; break;
+			case '3': dop->prng_frnd = 1; if (is_filename(optarg)) dop->prng_sfile = optarg; else dop->prng_seed = readint(optarg, 0); dop->bsim715 = 1; break;
+			case '4': dop->prng_frnd = 1; if (is_filename(optarg)) dop->prng_sfile = optarg; else dop->prng_seed = readint(optarg, 0); dop->bsim715 = 1; dop->bsim715_4 = 1; break;
 			case ':': fplog(stderr, FATAL, "option %c requires an argument!\n", optopt); 
 				shortusage();
 				cleanup(1); exit(11); break;
@@ -3216,6 +3238,13 @@ void sanitize_and_prepare(opt_t *op, dpopt_t *dop, fstate_t *fst, dpstate_t *dst
 			op->init_opos += fst->fin_opos;
 	}
 	input_length(op, fst);
+	/* Ajdust update frequency for small (<80MiB) and large (>1GiB) transfers */
+	if (fst->estxfer) {
+		if (fst->estxfer < 80*1024*1024)
+			updstat /= 2;
+		else if (fst->estxfer > 1024*1024*1024)
+			updstat *= 2;
+	}
 
 	if (op->init_ipos < 0 || op->init_opos < 0) {
 		fplog(stderr, FATAL, "negative position requested (%skiB)\n", 

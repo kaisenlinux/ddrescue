@@ -5,6 +5,7 @@
 #ifndef _FALLOCATE64_H
 #define _FALLOCATE64_H
 
+#define _GNU_SOURCE 1
 #include <sys/syscall.h>
 #include <sys/types.h>
 #ifdef HAVE_ENDIAN_H
@@ -18,6 +19,10 @@
 #  define FALLOC_FL_ADJUST_SIZE 0
 #  define FALLOC_FL_KEEP_SIZE 1
 # endif
+# ifdef HAVE_SYS_REG_H
+#  include <sys/reg.h>
+# endif
+
 /* Linux has a system call fallocate() since 2.6.23, but glibc
  * only provides the wrapper with glibc-2.10+
  * So add a (weak) fallocate symbol here.

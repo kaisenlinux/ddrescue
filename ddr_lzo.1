@@ -82,6 +82,10 @@ The default (lzo1x_1) is a good choice for fast compression and very fast
 decompression and ensures compatibility with lzop. For higher compression
 you might want to chose lzo1x_999, which is very slow but lzop compatible
 or lzo2a_999, which is twice as fast, but not compatible with lzop.
+Note that it's better to use other compression algorithms (e.g. lzma with
+a low preset) if you are interested in good compression, so there's rarely
+a reason to change the default algo, as you can get marginal gains only in
+exchange for signifiantly higher CPU and memory ocnsumption with LZO.
 .
 .SS Debugging
 The

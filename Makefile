@@ -1,14 +1,13 @@
-# Makefile for dd_rescue
 # (c) garloff@suse.de, 99/10/09, GNU GPL
 # (c) kurt@garloff.de, 2010 -- 2021, GNU GPL v2 or v3
 
-VERSION = 1.99.13
+VERSION = 1.99.17
 
 DESTDIR = 
 SRCDIR ?= .
 
 CC = gcc
-SHELL = /bin/bash
+SHELL := bash
 RPM_OPT_FLAGS ?= -Os -Wall -g -D_FORTIFY_SOURCE=2
 CFLAGS = $(RPM_OPT_FLAGS) $(EXTRA_CFLAGS) -DHAVE_CONFIG_H -I .
 CFLAGS_OPT = $(CFLAGS) -O3
@@ -30,7 +29,7 @@ OTHTARGETS = find_nonzero fiemap file_zblock fmt_no md5 sha256 sha512 sha224 sha
 ifneq ($(NO_ALIGNED_ALLOC),1)
 	OTHTARGETS += test_aligned_alloc
 endif
-OBJECTS = random.o frandom.o fmt_no.o find_nonzero.o 
+OBJECTS = random.o frandom.o fmt_no.o find_nonzero.o archdep.o
 FNZ_HEADERS = $(SRCDIR)/find_nonzero.h $(SRCDIR)/archdep.h $(SRCDIR)/ffs.h
 DDR_HEADERS = config.h $(SRCDIR)/random.h $(SRCDIR)/frandom.h $(SRCDIR)/list.h $(SRCDIR)/fmt_no.h $(SRCDIR)/find_nonzero.h $(SRCDIR)/archdep.h $(SRCDIR)/ffs.h $(SRCDIR)/fstrim.h $(SRCDIR)/ddr_plugin.h $(SRCDIR)/ddr_ctrl.h $(SRCDIR)/splice.h $(SRCDIR)/fallocate64.h $(SRCDIR)/pread64.h
 DOCDIR = $(prefix)/share/doc/packages
@@ -59,6 +58,13 @@ else
   HAVE_LZO=0
 endif
 
+ifeq ($(shell grep 'HAVE_LZMA_H 1' config.h >/dev/null 2>&1 && echo 1), 1)
+  LIBTARGETS += libddr_lzma.so
+  HAVE_LZMA=1
+else
+  HAVE_LZMA=0
+endif
+
 ifeq ($(shell grep 'HAVE_LIBCRYPTO 1' config.h >/dev/null 2>&1 && echo 1), 1)
   OTHTARGETS += pbkdf2
   AES_OSSL_PO = aes_ossl.po
@@ -73,6 +79,13 @@ ifeq ($(shell grep 'HAVE_\(ATTR\|SYS\)_XATTR_H 1' config.h >/dev/null 2>&1 && ec
   HAVE_XATTR=1
 else
   HAVE_XATTR=0
+endif
+
+ifneq ($(IGNORE_TARGET),1)
+ifeq ($(shell grep "NEED_ANDROID_TARGET 1" config.h >/dev/null 2>&1 && echo 1), 1)
+	TARGET=$(shell grep 'error: need -target' config.log | sed 's/^[^\-]*//')
+	CFLAGS += $(TARGET)
+endif
 endif
 
 ifeq ($(CC),wcl386)
@@ -98,11 +111,15 @@ HAVE_AES := $(shell echo "" | $(CC) -maes -xc - 2>&1 | grep unrecognized || echo
 HAVE_AVX := $(shell echo "" | $(CC) -mavx -xc - 2>&1 | grep unrecognized || echo 1)
 HAVE_AVX2 := $(shell echo "" | $(CC) -mavx2 -xc - 2>&1 | grep unrecognized || echo 1)
 HAVE_RDRND := $(shell echo "" | $(CC) -mrdrnd -xc - 2>&1 | grep unrecognized || echo 1)
+HAVE_SHA := $(shell echo "" | $(CC) -msha -xc - 2>&1 | grep unrecognized || echo 1)
 HAVE_VAES := $(shell echo "" | $(CC) -mvaes -xc - 2>&1 | grep unrecognized || echo 1)
 endif
 
 ifneq ($(HAVE_RDRND),1)
 	HAVE_RDRND = 0
+endif
+ifneq ($(HAVE_SHA),1)
+	HAVE_SHA = 0
 endif
 ifneq ($(HAVE_AES),1)
 	HAVE_AES = 0
@@ -163,7 +180,17 @@ ifeq ($(HAVE_RDRND),1)
 	#POBJECTS2 += rdrand.po
 	ARCHFLAGS +=  -mrdrnd
 else
-	CFLAGS += -DNO_RDRND 
+	CFLAGS += -DNO_RDRND
+endif
+ifeq ($(HAVE_SHA),1)
+	#OBJECTS2 += sha256_x86.o
+	#POBJECTS2 += sha256_x86.po
+	ARCHFLAGS +=  -msha
+	#SHAFLAGS = -msha -msse4 #-msse4.2
+	SHAOBJ = sha256_x86.o
+	SHAPOBJ = sha256_x86.po
+else
+	CFLAGS += -DNO_SHA
 endif
 endif
 
@@ -176,7 +203,8 @@ ifneq (,$(filter $(MACH),armv7 armv8))
 	AES_ARM64_O = aes_arm32.o
 	AES_ARM64_PO = aes_arm32.po
 	CFLAGS += -DHAVE_AES_ARM64
-	ARCHFLAGS += -mfpu=crypto-neon-fp-armv8
+	ARCHFLAGS += -mfpu=crypto-neon-fp-armv8 #-march=armv8
+	SHAFLAGS += -mfpu=crypto-neon-fp-armv8
 else
 ifeq (armv6,$(MACH))
 	OBJECTS2 = find_nonzero_arm.o
@@ -192,6 +220,7 @@ ifeq ($(MACH),aarch64)
 	AES_ARM64_PO = aes_arm64.po
 	CFLAGS += -DHAVE_AES_ARM64
 	ARCHFLAGS += -march=armv8-a+crypto
+	SHAFLAGS = -march=armv8-a+crypto
 endif
 
 OS = $(shell uname)
@@ -244,6 +273,12 @@ dep:
 	make .dep
 
 # These need optimization
+archdep.o: $(SRCDIR)/archdep.c archdep.h config.h
+	$(CC) $(CFLAGS_OPT) $(ARCHFLAGS) $(PIE) -c $<
+
+archdep.po: $(SRCDIR)/archdep.c archdep.h config.h
+	$(CC) $(CFLAGS_OPT) $(ARCHFLAGS) $(PIC) -c $<
+
 frandom.o: $(SRCDIR)/frandom.c config.h
 	$(CC) $(CFLAGS_OPT) $(PIE) -c $<
 
@@ -254,10 +289,16 @@ md5.po: $(SRCDIR)/md5.c
 	$(CC) $(CFLAGS_OPT) $(PIC) -o $@ -c $<
 
 sha256.po: $(SRCDIR)/sha256.c
-	$(CC) $(CFLAGS_OPT) $(PIC) -o $@ -c $<
+	$(CC) $(CFLAGS_OPT) $(SHAFLAGS) $(PIC) -o $@ -c $<
+
+sha256_x86.po: $(SRCDIR)/sha256_x86.c
+	$(CC) $(CFLAGS_OPT) $(ARCHFLAGS) $(PIC) -o $@ -c $<
 
 sha256.o: $(SRCDIR)/sha256.c
-	$(CC) $(CFLAGS_OPT) $(PIE) -c $<
+	$(CC) $(CFLAGS_OPT) $(SHAFLAGS) $(PIE) -c $<
+
+sha256_x86.o: $(SRCDIR)/sha256_x86.c
+	$(CC) $(CFLAGS_OPT) $(ARCHFLAGS) $(PIE) -o $@ -c $<
 
 sha512.po: $(SRCDIR)/sha512.c
 	$(CC) $(CFLAGS_OPT) $(PIC) -o $@ -c $<
@@ -289,7 +330,7 @@ libddr_lzo.po: $(SRCDIR)/libddr_lzo.c config.h
 	$(CC) $(CFLAGS) $(PIC) -fstack-protector -o $@ -c $<
 
 # The plugins
-libddr_hash.so: libddr_hash.po md5.po sha256.po sha512.po sha1.po pbkdf2.po checksum_file.po
+libddr_hash.so: libddr_hash.po md5.po sha256.po $(SHAPOBJ) sha512.po sha1.po pbkdf2.po checksum_file.po
 	$(CC) -shared -o $@ $^ $(EXTRA_LDFLAGS)
 
 libddr_MD5.so: libddr_hash.so
@@ -301,8 +342,11 @@ libddr_lzo.so: libddr_lzo.po
 libddr_null.so: libddr_null.po
 	$(CC) -shared -o $@ $^
 
-libddr_crypt.so: libddr_crypt.po aes.po aes_c.po $(AESNI_PO) $(AES_ARM64_PO) $(AES_OSSL_PO) pbkdf2.po sha256.po pbkdf_ossl.po md5.po checksum_file.po secmem.po random.po $(POBJECTS2)
+libddr_crypt.so: libddr_crypt.po aes.po aes_c.po $(AESNI_PO) $(AES_ARM64_PO) $(AES_OSSL_PO) pbkdf2.po sha256.po $(SHAPOBJ) pbkdf_ossl.po md5.po checksum_file.po secmem.po random.po $(POBJECTS2)
 	$(CC) -shared -o $@ $^ $(CRYPTOLIB) $(EXTRA_LDFLAGS)
+
+libddr_lzma.so: libddr_lzma.po
+	$(CC) -shared -o $@ $^ -llzma
 
 # More special compiler flags
 find_nonzero.o: $(SRCDIR)/find_nonzero.c
@@ -373,8 +417,11 @@ dd_rescue: $(SRCDIR)/dd_rescue.c $(DDR_HEADERS) $(OBJECTS) $(OBJECTS2)
 md5: $(SRCDIR)/md5.c $(SRCDIR)/md5.h $(SRCDIR)/hash.h config.h
 	$(CC) $(CFLAGS_OPT) $(PIE) $(LDPIE) -DMD5_MAIN -o $@ $<
 
-sha256: $(SRCDIR)/sha256.c $(SRCDIR)/sha256.h $(SRCDIR)/hash.h config.h
-	$(CC) $(CFLAGS_OPT) $(PIE) $(LDPIE) -DSHA256_MAIN -o $@ $<
+sha256_main.o: $(SRCDIR)/sha256.c $(SRCDIR)/sha256.h $(SRCDIR)/hash.h config.h
+	$(CC) $(CFLAGS_OPT) $(SHAFLAGS) $(PIE) -c -DSHA256_MAIN -o $@ $<
+
+sha256: sha256_main.o $(SHAOBJ) archdep.o
+	$(CC) $(CFLAGS_OPT) $(PIE) $(LDPIE) -o $@ $^
 
 sha224: sha256
 	ln -sf sha256 sha224
@@ -414,14 +461,14 @@ clean:
 	rm -f $(TARGETS) $(OTHTARGETS) $(OBJECTS) $(OBJECTS2) core test log *.o *.po *.cmp *.enc *.enc.old CHECKSUMS.* SALTS.* KEYS.* IVS.* .dep
 
 # More test programs
-find_nonzero: find_nonzero_main.o $(OBJECTS2)
+find_nonzero: find_nonzero_main.o $(OBJECTS2) archdep.o
 	$(CC) $(CFLAGS_OPT) $(PIE) $(LDPIE) -o $@ $^ 
 
 fmt_no: $(SRCDIR)/fmt_no.c $(SRCDIR)/fmt_no.h
 	$(CC) $(CFLAGS) $(PIE) $(LDPIE) -o $@ $< -DTEST
 
-file_zblock: $(SRCDIR)/file_zblock.c $(FNZ_HEADERS) config.h find_nonzero.o $(OBJECTS2)
-	$(CC) $(CFLAGS) $(PIE) $(LDPIE) -o $@ $< find_nonzero.o $(OBJECTS2)
+file_zblock: $(SRCDIR)/file_zblock.c $(FNZ_HEADERS) config.h find_nonzero.o archdep.o $(OBJECTS2)
+	$(CC) $(CFLAGS) $(PIE) $(LDPIE) -o $@ $< find_nonzero.o archdep.o $(OBJECTS2)
 
 fiemap: $(SRCDIR)/fiemap.c $(SRCDIR)/fiemap.h $(SRCDIR)/fstrim.h config.h fstrim.o
 	$(CC) $(CFLAGS) $(PIE) $(LDPIE) -DTEST_FIEMAP -o $@ $< fstrim.o
@@ -429,8 +476,8 @@ fiemap: $(SRCDIR)/fiemap.c $(SRCDIR)/fiemap.h $(SRCDIR)/fstrim.h config.h fstrim
 pbkdf2: $(SRCDIR)/ossl_pbkdf2.c
 	$(CC) $(CFLAGS) $(PIE) $(LDPIE) -o $@ $< $(CRYPTOLIB)
 
-test_aes: $(SRCDIR)/test_aes.c $(AESNI_O) $(AES_ARM64_O) aes_c.o secmem.o sha256.o find_nonzero.o $(AES_OSSL_O) aes.o $(SRCDIR)/aesni.h $(SRCDIR)/aes_arm64.h config.h $(OBJECTS2)
-	$(CC) $(CFLAGS) $(PIE) $(LDPIE) $(DEF) -o $@ $< $(AESNI_O) $(AES_ARM64_O) aes_c.o secmem.o sha256.o $(AES_OSSL_O) aes.o find_nonzero.o $(OBJECTS2) $(CRYPTOLIB)
+test_aes: $(SRCDIR)/test_aes.c $(AESNI_O) $(AES_ARM64_O) aes_c.o secmem.o sha256.o $(SHAOBJ) archdep.o $(AES_OSSL_O) aes.o $(SRCDIR)/aesni.h $(SRCDIR)/aes_arm64.h config.h $(OBJECTS2)
+	$(CC) $(CFLAGS) $(PIE) $(LDPIE) $(DEF) -o $@ $< $(AESNI_O) $(AES_ARM64_O) aes_c.o secmem.o sha256.o $(SHAOBJ) $(AES_OSSL_O) aes.o archdep.o $(OBJECTS2) $(CRYPTOLIB)
 
 # Special optimized versions
 ifeq ($(HAVE_AVX2),1)
@@ -453,10 +500,10 @@ aes_arm64.po: $(SRCDIR)/aes_arm64.c
 	$(CC) $(CFLAGS) $(PIC) -O3 -march=armv8-a+crypto -c $< -o $@
 
 aes_arm32.o: $(SRCDIR)/aes_arm32.c
-	$(CC) $(CFLAGS) $(PIE) -O3 -march=armv7-a -mfpu=crypto-neon-fp-armv8 -c $<
+	$(CC) $(CFLAGS) $(PIE) -O3 $(SHAFLAGS) -c $<
 
 aes_arm32.po: $(SRCDIR)/aes_arm32.c
-	$(CC) $(CFLAGS) $(PIC) -O3 -march=armv7-a -mfpu=crypto-neon-fp-armv8 -c $< -o $@
+	$(CC) $(CFLAGS) $(PIC) -O3 $(SHAFLAGS) -c $< -o $@
 
 aes_c.o: $(SRCDIR)/aes_c.c
 	$(CC) $(CFLAGS) $(PIE) $(FULL_UNROLL) -O3 -c $<
@@ -491,8 +538,8 @@ install: $(TARGETS)
 	$(INSTALL) $(INSTALLFLAGS) $(INSTASROOT) -m 755 $(LIBTARGETS) $(INSTALLLIBDIR)
 	ln -sf libddr_hash.so $(INSTALLLIBDIR)/libddr_MD5.so
 	mkdir -p $(MANDIR)/man1
-	$(INSTALL) $(INSTASROOT) -m 644 dd_rescue.1 ddr_lzo.1 ddr_crypt.1 $(MANDIR)/man1/
-	gzip -9f $(MANDIR)/man1/dd_rescue.1 $(MANDIR)/man1/ddr_lzo.1 $(MANDIR)/man1/ddr_crypt.1
+	$(INSTALL) $(INSTASROOT) -m 644 dd_rescue.1 ddr_lzo.1 ddr_crypt.1 ddr_lzma.1 $(MANDIR)/man1/
+	gzip -9f $(MANDIR)/man1/dd_rescue.1 $(MANDIR)/man1/ddr_lzo.1 $(MANDIR)/man1/ddr_crypt.1 $(MANDIR)/man1/ddr_lzma.1
 
 check: $(TARGETS) find_nonzero md5 sha1 sha256 sha512 fmt_no
 	@echo "make check ... Pass VG=\"valgrind --options\" to use with valgrind"
@@ -563,6 +610,8 @@ check: $(TARGETS) find_nonzero md5 sha1 sha256 sha512 fmt_no
 	if test $(HAVE_LZO) = 1; then $(MAKE) check_lzo_algos; fi
 	#if test $(HAVE_LZO) = 1; then $(MAKE) check_lzo_test; fi
 	if test $(HAVE_LZO) = 1; then $(MAKE) check_lzo_fuzz; fi
+	# Tests for libddr_lzma.so
+	if test $(HAVE_LZMA) = 1; then $(MAKE) check_lzma; fi
 	# Tests for libddr_null
 	$(VG) ./dd_rescue  -L ./libddr_null.so=debug dd_rescue /dev/null
 	# Hash tests with set_xattr and chk_xattr
@@ -617,20 +666,20 @@ check_hmac: $(TARGETS)
 check_sha2: $(TARGETS) sha224 sha384
 	rm -f CHECKSUMS.sha256 CHECKSUMS.sha512
 	$(VG) ./dd_rescue -c0 -a -b16k -t -L ./libddr_hash.so=output:alg=sha224 TEST TEST2 >HASH.TEST
-	sha224sum -c HASH.TEST
+	if type -p sha224sum >/dev/null 2>&1; then sha224sum -c HASH.TEST; fi
 	$(VG) ./dd_rescue -c0 -a -b16k -t -L ./libddr_hash.so=outnm=:alg=sha256 TEST TEST2 >HASH.TEST
 	sha256sum -c CHECKSUMS.sha256
 	$(VG) ./dd_rescue -c0 -a -b16k -t -L ./libddr_hash.so=output:alg=sha384 TEST TEST2 >HASH.TEST
-	sha384sum -c HASH.TEST
+	if type -p sha384sum >/dev/null 2>&1; then sha384sum -c HASH.TEST; fi
 	$(VG) ./dd_rescue -c0 -a -b16k -t -L ./libddr_hash.so=outnm=:alg=sha512 TEST TEST2
 	$(VG) ./dd_rescue -c0 -a -b16k -t -L ./libddr_hash.so=outnm=:alg=sha512,./libddr_null.so=change dd_rescue /dev/null
 	sha512sum -c CHECKSUMS.sha512
 	$(VG) ./dd_rescue -c0 -a -b16k -t -L ./libddr_hash.so=sha512:chknm=CHECKSUMS.sha512 TEST2 /dev/null
 	$(VG) ./dd_rescue -c0 -a -b16k -t -L ./libddr_hash.so=alg=sha512:chknm= dd_rescue /dev/null
 	$(VG) ./dd_rescue -c0 -a -b16k -t -L ./libddr_hash.so=sha512:check dd_rescue /dev/null <CHECKSUMS.sha512
-	$(VG) ./sha224 /dev/null | sha224sum -c
+	if type -p sha224sum >/dev/null 2>&1; then $(VG) ./sha224 /dev/null | sha224sum -c; fi
 	$(VG) ./sha256 /dev/null | sha256sum -c
-	$(VG) ./sha384 /dev/null | sha384sum -c
+	if type -p sha384sum >/dev/null 2>&1; then $(VG) ./sha384 /dev/null | sha384sum -c; fi
 	$(VG) ./sha512 /dev/null | sha512sum -c
 	$(VG) ./dd_rescue -q -c0 -a -b16k -t -L ./libddr_hash.so=sha256:outnm=- TEST2 /dev/null | $(VG) ./dd_rescue -c0 -a -b16k -t -L ./libddr_hash.so=sha256:chknm=- TEST2 /dev/null
 	rm -f HASH.TEST CHECKSUMS.sha256 CHECKSUMS.sha512 TEST2
@@ -681,7 +730,8 @@ check_lzo: $(TARGETS)
 	$(VG) ./dd_rescue -aL ./libddr_lzo.so,./libddr_MD5.so=output test.lzo test.cmp > MD5
 	md5sum -c MD5
 	cmp test test.cmp
-	for hash in md5 sha1 sha224 sha256 sha384 sha512; do $(VG) ./dd_rescue -b16k -TL ./libddr_lzo.so=compress,./libddr_hash.so=$$hash:outfd=1 dd_rescue dd_rescue.lzo > ddr.hash || exit 1; $${hash}sum -c ddr.hash || exit 2; done
+	if type -p sha224sum >/dev/null 2>&1; then hashlist="md5 sha1 sha224 sha256 sha384 sha512"; else hashlist="md5 sha1 sha256 sha512"; fi; \
+	for hash in $$hashlist; do $(VG) ./dd_rescue -b16k -TL ./libddr_lzo.so=compress,./libddr_hash.so=$$hash:outfd=1 dd_rescue dd_rescue.lzo > ddr.hash || exit 1; $${hash}sum -c ddr.hash || exit 2; done
 	rm -f MD5 test test.lzo test.cmp ddr.hash dd_rescue.lzo
 	
 check_lzo_algos: $(TARGETS)
@@ -708,7 +758,7 @@ check_aes: $(TARGETS) test_aes
 
 check_crypt: $(TARGETS) test_aes
 	# TODO: Move previous cases into script ...
-	HAVE_LZO=$(HAVE_LZO) HAVE_OPENSSL=$(HAVE_OPENSSL) HAVE_AES=$(HAVE_AES) ./test_crypt.sh
+	HAVE_LZMA=$(HAVE_LZMA) HAVE_LZO=$(HAVE_LZO) HAVE_OPENSSL=$(HAVE_OPENSSL) HAVE_AES=$(HAVE_AES) ./test_crypt.sh
 	# Holes (all)
 	# Reverse (CTR, ECB)
 	# Chain with lzo, hash (all)
@@ -765,4 +815,24 @@ make_check_crypt: check_crypt
 	# Cleanup
 	rm -f dd_rescue2 dd_rescue.dec dd_rescue.enc
 
-
+check_lzma: $(TARGETS)
+	@echo "make check ... Pass VG=\"valgrind --options\" to use with valgrind"
+	$(VG) ./dd_rescue -L ./libddr_lzma.so dd_rescue dd_rescue.xz
+	$(VG) ./dd_rescue -L ./libddr_lzma.so dd_rescue.xz dd_rescue_d
+	cmp dd_rescue dd_rescue_d
+	./dd_rescue -Z /dev/urandom -m16M first_test.txt
+	$(VG) ./dd_rescue -L ./libddr_lzma.so first_test.txt first_test.txt.xz
+	$(VG) ./dd_rescue -L ./libddr_lzma.so first_test.txt.xz first_test_d.txt
+	cmp first_test.txt first_test_d.txt
+	./dd_rescue -Z /dev/urandom -m64M second_test.txt
+	$(VG) ./dd_rescue -L ./libddr_lzma.so second_test.txt second_test.txt.xz
+	$(VG) ./dd_rescue -L ./libddr_lzma.so second_test.txt.xz second_test_d.txt
+	cmp second_test.txt second_test_d.txt
+	rm -f dd_rescue_d dd_rescue.xz *_test.txt.xz *_test_d.txt
+	$(VG) ./dd_rescue -L ./libddr_lzma.so=mt first_test.txt first_test.txt.xz
+	$(VG) ./dd_rescue -L ./libddr_lzma.so=mt first_test.txt.xz first_test_d.txt
+	cmp first_test.txt first_test_d.txt
+	$(VG) ./dd_rescue -L ./libddr_lzma.so=mt second_test.txt second_test.txt.xz
+	$(VG) ./dd_rescue -L ./libddr_lzma.so=mt second_test.txt.xz second_test_d.txt
+	cmp second_test.txt second_test_d.txt
+	rm -f *_test.* *_test_d.*

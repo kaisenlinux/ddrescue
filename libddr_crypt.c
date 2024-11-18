@@ -601,10 +601,26 @@ int read_fd(unsigned char* res, const char* param, uint maxlen, const char* what
 		get_offs_len(param, &off, &sz);
 		if (hex) {
 			ln = pread(fd, ibuf, MIN(2*maxlen+2, (sz? sz: 4096)), off);
+			if (ln == -1) {
+				if (errno == ESPIPE && off == 0)
+					ln = read(fd, ibuf, MIN(2*maxlen+2, (sz? sz: 4096)));
+				if (ln < 0) {
+					FPLOG(FATAL, "can not read passphrase from fd %i!\n", fd);
+					return 1;
+				}
+			}
 			ibuf[ln] = 0;
 			ln = parse_hex(res, ibuf, maxlen);
 		} else {
 			ln = pread(fd, res, MIN(maxlen, (sz? sz: 4096)), off);
+			if (ln == -1) {
+				if (errno == ESPIPE && off == 0)
+					ln = read(fd, res, MIN(2*maxlen+2, (sz? sz: 4096)));
+				if (ln < 0) {
+					FPLOG(FATAL, "can not read passphrase from fd %i!\n", fd);
+					return 1;
+				}
+			}
 			if (ln < (int)maxlen)
 				memset(res+ln, 0, maxlen-ln);
 		}
@@ -681,8 +697,10 @@ void whiteout(char* str, char quiet)
 {
 #ifndef NO_WRITE_ARGV
 	int ln = strlen(str);
-	assert(ln<=512 && ln >=0);
-	memset(str, 'X', ln);
+	assert(ln <= 512 && ln >= 0);
+	memset(str, 0, ln);
+	if (ln >= 1)
+		str[0] = 'X';
 #endif
 	if (!quiet)
 		FPLOG(WARN, "Don't specify sensitive data on the command line!\n", NULL);

@@ -27,7 +27,6 @@
 
 #include <stdlib.h>
 #include <string.h>
-#include <libgen.h>
 #include <ctype.h>
 #include <assert.h>
 #include <errno.h>
@@ -56,7 +55,7 @@ extern ddr_plugin_t ddr_plug;
 hashalg_t hashes[] = { MD5_HALG_T, SHA1_HALG_T, SHA256_HALG_T, SHA224_HALG_T, SHA512_HALG_T, SHA384_HALG_T,
 			// SHA3 ...
 };
-	
+
 typedef struct _hash_state {
 	hash_t hash, hmach;
 	loff_t hash_pos;
@@ -108,10 +107,12 @@ static loff_t readint(const char* const ptr)
 
 	res = strtod(ptr, &es);
 	switch (*es) {
+		case 's':
 		case 'b': res *= 512; break;
 		case 'k': res *= 1024; break;
 		case 'M': res *= 1024*1024; break;
 		case 'G': res *= 1024*1024*1024; break;
+		case 'T': res *= 1024*1024*1024*1024ULL; break;
 		case ' ':
 		case '\0': break;
 		default:

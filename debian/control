@@ -2,18 +2,18 @@ Source: ddrescue
 Section: utils
 Priority: optional
 Maintainer: Kevin Chevreuil - Kaisen <kaisen@kaisenlinux.org>
-Build-Depends: debhelper-compat (= 12),
+Build-Depends: debhelper-compat (= 13),
  libattr1-dev,
  libacl1-dev,
  liblzo2-dev,
  libssl-dev,
-Standards-Version: 4.5.1
+Standards-Version: 4.7.0
 Homepage: http://www.garloff.de/kurt/linux/ddrescue/
 Vcs-Git: https://gitlab.com/kaisenlinux/packages/ddrescue.git
 Vcs-Browser: https://gitlab.com/kaisenlinux/packages/ddrescue
 
 Package: ddrescue
-Architecture: any
+Architecture: amd64 arm64
 Depends: ${shlibs:Depends}, ${misc:Depends}
 Description: data recovery and protection tool
  When your disk has crashed and you try to copy it over to another one,

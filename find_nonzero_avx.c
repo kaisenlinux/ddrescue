@@ -13,15 +13,6 @@
 #ifdef __AVX2__
 
 #include <immintrin.h>
-volatile unsigned _cmp_mask_probe_avx;
-void probe_avx2()
-{
-	__m256i register _probe_ymm = _mm256_setzero_si256();
-	__m256i register ymm2 = _mm256_setzero_si256();
-	__m256i register ymm3 = _mm256_cmpeq_epi8(_probe_ymm, ymm2);
-	_cmp_mask_probe_avx = _mm256_movemask_epi8(ymm3);
-}
-
 /** AVX2 version for measuring the initial zero bytes of 32b aligned blk */
 size_t find_nonzero_avx2(const unsigned char* blk, const size_t ln)
 {

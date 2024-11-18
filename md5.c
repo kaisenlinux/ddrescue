@@ -21,7 +21,7 @@
 #endif
 
 // Constants are the integer part of the sines of integers (in radians) * 2^32.
-static const uint32_t k[64] = {
+static const uint32_t k[64] ALIGNED(64) = {
 	0xd76aa478, 0xe8c7b756, 0x242070db, 0xc1bdceee, 0xf57c0faf, 0x4787c62a,
 	0xa8304613, 0xfd469501, 0x698098d8, 0x8b44f7af, 0xffff5bb1, 0x895cd7be,
 	0x6b901122, 0xfd987193, 0xa679438e, 0x49b40821, 0xf61e2562, 0xc040b340,
@@ -36,12 +36,13 @@ static const uint32_t k[64] = {
 };
 
 // r specifies the per-round shift amounts
-static const uint32_t r[] = { 7,  12, 17, 22, 7,  12, 17, 22, 7,  12, 17,
-			      22, 7,  12, 17, 22, 5,  9,  14, 20, 5,  9,
-			      14, 20, 5,  9,  14, 20, 5,  9,  14, 20, 4,
-			      11, 16, 23, 4,  11, 16, 23, 4,  11, 16, 23,
-			      4,  11, 16, 23, 6,  10, 15, 21, 6,  10, 15,
-			      21, 6,  10, 15, 21, 6,  10, 15, 21 };
+static const uint8_t r[] ALIGNED(64) = {
+			 7, 12, 17, 22,  7, 12, 17, 22,  7, 12, 17,
+			22,  7, 12, 17, 22,  5,  9, 14, 20,  5,  9,
+			14, 20,  5,  9, 14, 20,  5,  9, 14, 20,  4,
+			11, 16, 23,  4, 11, 16, 23,  4, 11, 16, 23,
+		         4, 11, 16, 23,  6, 10, 15, 21,  6, 10, 15,
+			21,  6, 10, 15, 21,  6, 10, 15, 21 };
 
 // leftrotate function definition
 #define LEFTROTATE(x, c) (((x) << (c)) | ((x) >> (32 - (c))))
@@ -72,20 +73,20 @@ static inline uint32_t to_int32(const uint8_t *bytes)
 }
 #endif
 
-// Implicit: temp, i, f, g, k[], w[]
-#define MD5_SWAP(a,b,c,d)		\
-	const uint32_t _temp = d;	\
+// Implicit: i, k[], w[], r[]
+#define MD5_SWAP(a,b,c,d,ff,gg, temp)	\
+	const uint32_t temp = d;	\
 	d = c;				\
 	c = b;				\
-	b = b + LEFTROTATE((a + f + k[i] + w[g]), r[i]);	\
-	a = _temp
+	b = b + LEFTROTATE((a + ff + k[i] + w[gg]), r[i]);	\
+	a = temp;			\
 
 
-void md5_64(const uint8_t *ptr, hash_t *ctx)
+static inline void __md5_64(const uint8_t *ptr, hash_t *ctx, const char clear)
 {
 	uint32_t _a, _b, _c, _d;
 #if !defined(HAVE_UNALIGNED_HANDLING) || __BYTE_ORDER != __LITTLE_ENDIAN
-	uint32_t ww[16];
+	uint32_t ww[16] ALIGNED(64);
 #endif
 	unsigned int i;
 
@@ -105,11 +106,6 @@ void md5_64(const uint8_t *ptr, hash_t *ctx)
 	for (i = 0; i < 16; ++i)
 		ww[i] = to_int32(ptr + i * 4);
 #endif
-#ifdef HAVE___BUILTIN_PREFETCH
-	__builtin_prefetch(ptr, 0, 3);
-	//__builtin_prefetch(ptr+32, 0, 3);
-#endif
-
 	// Initialize hash value for this chunk:
 	_a = ctx->md5_h[0]; _b = ctx->md5_h[1]; 
 	_c = ctx->md5_h[2]; _d = ctx->md5_h[3];
@@ -117,31 +113,71 @@ void md5_64(const uint8_t *ptr, hash_t *ctx)
 	for (i = 0; i < 16; ++i) {
 		const uint32_t f = (_b & _c) | ((~_b) & _d);
 		const uint32_t g = i;
-		MD5_SWAP(_a, _b, _c, _d);
+		MD5_SWAP(_a, _b, _c, _d, f, g, tmp);
+#ifndef NO_UNROLL_MD5_1
+		++i;
+		const uint32_t f_ = (_b & _c) | ((~_b) & _d);
+		const uint32_t g_ = i;
+		MD5_SWAP(_a, _b, _c, _d, f_, g_, tmp_);
+#endif
 	}
 	for (; i < 32; ++i) {
 		const uint32_t f = (_d & _b) | ((~_d) & _c);
 		const uint32_t g = (5 * i + 1) % 16;
-		MD5_SWAP(_a, _b, _c, _d);
+		MD5_SWAP(_a, _b, _c, _d, f, g, tmp);
+#ifndef NO_UNROLL_MD5_1
+		++i;
+		const uint32_t f_ = (_d & _b) | ((~_d) & _c);
+		const uint32_t g_ = (5 * i + 1) % 16;
+		MD5_SWAP(_a, _b, _c, _d, f_, g_, tmp_);
+#endif
 	}
 	for (; i < 48; ++i) {
 		const uint32_t f = _b ^ _c ^ _d;
 		const uint32_t g = (3 * i + 5) % 16;
-		MD5_SWAP(_a, _b, _c, _d);
+		MD5_SWAP(_a, _b, _c, _d, f, g, tmp);
+#ifndef NO_UNROLL_MD5_1
+		++i;
+		const uint32_t f_ = _b ^ _c ^ _d;
+		const uint32_t g_ = (3 * i + 5) % 16;
+		MD5_SWAP(_a, _b, _c, _d, f_, g_, tmp_);
+#endif
 	} 
 	for (; i < 64; ++i) {
 		const uint32_t f = _c ^ (_b | (~_d));
 		const uint32_t g = (7 * i) % 16;
-		MD5_SWAP(_a, _b, _c, _d);
+		MD5_SWAP(_a, _b, _c, _d, f, g, tmp);
+#ifndef NO_UNROLL_MD5_1
+		++i;
+		const uint32_t f_ = _c ^ (_b | (~_d));
+		const uint32_t g_ = (7 * i) % 16;
+		MD5_SWAP(_a, _b, _c, _d, f_, g_, tmp_);
+#endif
 	}
-
+#if !defined(HAVE_UNALIGNED_HANDLING) || __BYTE_ORDER != __LITTLE_ENDIAN
+	if (clear) {
+		/* Clear mem */
+		memset(ww, 0, sizeof(ww));
+		asm(""::"r"(ww):"0");
+	}
+#endif
 	// Add this chunk's hash to result so far:
 	ctx->md5_h[0] += _a; ctx->md5_h[1] += _b; 
 	ctx->md5_h[2] += _c; ctx->md5_h[3] += _d;
 }
 
+void md5_64(const uint8_t *ptr, hash_t *ctx)
+{
+	__md5_64(ptr, ctx, 0);
+}
+
 void md5_init(hash_t *ctx)
 {
+	/* Prefetch r, k */
+	__builtin_prefetch(r, 0, 3);
+	int koff;
+	for (koff = 0; koff < sizeof(k)/sizeof(*k); koff += 64/sizeof(*k))
+		__builtin_prefetch(k+koff, 0, 3);
 	memset((char*)ctx+16, 0, sizeof(hash_t)-16);
 	ctx->md5_h[0] = 0x67452301;
 	ctx->md5_h[1] = 0xefcdab89;
@@ -151,6 +187,12 @@ void md5_init(hash_t *ctx)
 
 void md5_calc(const uint8_t *ptr, size_t chunk_ln, size_t final_len, hash_t *ctx)
 {
+	__builtin_prefetch(ptr, 0, 2);
+	__builtin_prefetch(ptr+64, 0, 2);
+	__builtin_prefetch(ptr+128, 0, 2);
+	__builtin_prefetch(ptr+192, 0, 2);
+	/* ctx and k should be cache-hot already */
+	//__builtin_prefetch(ctx->md5_h, 0, 3);
 	uint32_t offset;
 	for (offset = 0; offset+64 <= chunk_ln; offset += 64)
 		md5_64(ptr + offset, ctx);
@@ -175,7 +217,7 @@ void md5_calc(const uint8_t *ptr, size_t chunk_ln, size_t final_len, hash_t *ctx
 	/* FIXME: Confused? */
 	to_bytes(final_len <<  3, md5_buf+56);
 	to_bytes(final_len >> 29, md5_buf+60);
-	md5_64(md5_buf, ctx);
+	__md5_64(md5_buf, ctx, 1);
 }
 
 #define BSWAP32(x) ((x<<24) | ((x<<8)&0x00ff0000) | ((x>>8)&0x0000ff00) | (x>>24))

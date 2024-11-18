@@ -42,6 +42,12 @@
 # define UNLIKELY(expr) (expr)
 #endif
 
+#ifdef HAVE_ALIGNED_ATTR
+#define ALIGNED(x) __attribute__((aligned(x)))
+#else
+#define ALIGNED(x)
+#endif
+
 typedef unsigned char u8;
 
 
@@ -49,7 +55,7 @@ struct frandom_state
 {
 	u8 S[256]; /* The state array */
 	u8 i, j;        
-};
+} ALIGNED(64);
 
 static struct frandom_state *int_random_state;
 

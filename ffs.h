@@ -27,7 +27,10 @@
 #ifdef HAVE_ENDIAN_H
 #include <endian.h>
 #endif
-
+/* Pull in __WORDSIZE on musl */
+#ifdef HAVE_SYS_REG_H
+#include <sys/reg.h>
+#endif
 
 #ifdef HAVE_FFS
 # define myffs(x) ffs(x)

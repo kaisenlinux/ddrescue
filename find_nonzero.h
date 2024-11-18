@@ -13,38 +13,6 @@
 #include "ffs.h"
 #include "archdep.h"
 
-extern char cap_str[64];
-extern char FNZ_OPT[64];
-
-#if defined( __GNUC__) && (__GNUC__ > 4 || (__GNUC__ == 4 && __GNUC_MINOR__ >= 8)) && !defined(DO_OWN_DETECT)
-# define PROBE(FEAT, PROBEFN)	!!__builtin_cpu_supports(FEAT)
-#else
-# define PROBE(FEAT, PROBEFN)	probe_procedure(PROBEFN)
-#endif
-
-#define detect(feature, probefn)		\
-({						\
-	char cap = PROBE(feature, probefn);	\
-	if (cap) {				\
-		strcat(cap_str, feature);	\
-		strcat(cap_str, " ");		\
-	}					\
- 	cap;					\
-})
-
-#define detect2(feature, probefn)		\
-({						\
-	char cap = probe_procedure(probefn);	\
-	if (cap) {				\
-		strcat(cap_str, feature);	\
-		strcat(cap_str, " ");		\
-	}					\
- 	cap;					\
-})
-
-
-extern void detect_cpu_cap();
-
 /* This has been inspired by http://developer.amd.com/community/blog/faster-string-operations/ */
 extern size_t find_nonzero_sse2 (const unsigned char* blk, const size_t ln);
 extern size_t find_nonzero_avx2 (const unsigned char* blk, const size_t ln);

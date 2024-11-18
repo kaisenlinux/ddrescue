@@ -43,45 +43,6 @@ unsigned long rdrand64()
 #warning no rdrand64 on 32bit system
 #endif
 
-//#include <unistd.h>
-volatile unsigned int _rdrand_res;
-void probe_rdrand()
-{
-	unsigned int val = 0;
-	_rdrand32_step(&val);
-	_rdrand_res = val;
-}
-#endif	/* RDRND */
-
-#ifdef __AES__
-#include <wmmintrin.h>
-volatile char _aes_probe_res[32];
-void probe_aesni()
-{
-	__m128i x = _mm_setzero_si128();
-	x = _mm_aeskeygenassist_si128(x, 0x01);
-	_mm_storeu_si128((__m128i*)_aes_probe_res, x);
-}
-#ifdef __VAES__
-#include <immintrin.h>
-#include <vaesintrin.h>
-void probe_vaes()
-{
-	__m256i x = _mm256_setzero_si256();
-	__m256i k = _mm256_setzero_si256();
-	x = _mm256_aesenc_epi128(x, k);
-	_mm256_storeu_si256((__m256i*)_aes_probe_res, x);
-}
-#else
-# ifndef NO_VAES
-#  warning please compile rdrand with -mvaes
-# endif
-#endif
-#else
-# warning please compile rdrand with -maes
-#endif
-
-
 #if 0
 unsigned int rdrand32()
 {
@@ -90,7 +51,9 @@ unsigned int rdrand32()
 	return val;
 }
 #endif
-#endif
+#endif /* __x86_64__ */
+
+#endif	/* x86 */
 
 #ifdef RDRAND_MAIN
 #include <stdio.h>

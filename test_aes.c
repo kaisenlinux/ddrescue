@@ -342,14 +342,14 @@ int main(int argc, char *argv[])
 	unsigned char *key = (unsigned char*)"Test Key_123 is long enough even for AES-256";
 	//int dbg = 0;
 	char* testalg;
-	ARCH_DETECT;
+	detect_cpu_cap();
 #if defined(__i386__) || defined(__x86_64__)
-	printf("CPU Features: SSE2 %i SSE4.2 %i AES %i RDRAND %i AVX2 %i VAES %i\n",
-		have_sse2, have_sse42, have_aesni, have_rdrand, have_avx2, have_vaes);
+	printf("CPU Features: SSE2 %i SSE4.2 %i AES %i RDRAND %i SHA %i AVX2 %i VAES %i\n",
+		have_sse2, have_sse42, have_aesni, have_rdrand, have_sha256, have_avx2, have_vaes);
 #elif defined(__arm__) || defined(__aarch64__)
 	//have_arm8crypto = 1;
-	printf("CPU Features: AES Arm8 %i\n",
-		have_arm8crypto);
+	printf("CPU Features: AES Arm8 %i SHA Arm8 %i\n",
+		have_arm8crypto, have_arm8sha);
 #endif
 	crypto = secmem_init();
 	/*

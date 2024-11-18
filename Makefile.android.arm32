@@ -19,10 +19,10 @@ PATH = $(shell echo $$PATH)
 #.PHONY: dd_rescue find_nonzero fmt_no fiemap file_zblock
 
 default: config.h crtbegin_so.o $(DEPS) 
-	$(MAKE) $(MAKEFLAGS) -f Makefile PATH=$(CBIN):$(PATH) CC="$(CC) $(CFLG)" LD="$(CC) -L $(LIBD)" MACH=armv6 EXTRA_LDFLAGS="$(ATTR)" LDPIE="" NO_ALIGNED_ALLOC=1 $@
+	$(MAKE) $(MAKEFLAGS) -f Makefile PATH=$(CBIN):$(PATH) CC="$(CC) $(CFLG)" LD="$(CC) -L $(LIBD)" MACH=armv6 IGNORE_TARGET=1 EXTRA_LDFLAGS="$(ATTR)" LDPIE="" NO_ALIGNED_ALLOC=1 SHAFLAGS="-mfloat-abi=softfp" $@
 
 all test check strip lib static libfalloc test_aes find_nonzero sha512 sha256 sha1 md5 fiemap file_zblock: config.h crtbegin_so.o $(DEPS)
-	$(MAKE) $(MAKEFLAGS) -f Makefile PATH=$(CBIN):$(PATH) CC="$(CC) $(CFLG)" LD="$(CC) -L $(LIBD)" MACH=armv6 EXTRA_LDFLAGS="$(ATTR)" LDPIE="" NO_ALIGNED_ALLOC=1 $@
+	$(MAKE) $(MAKEFLAGS) -f Makefile PATH=$(CBIN):$(PATH) CC="$(CC) $(CFLG)" LD="$(CC) -L $(LIBD)" MACH=armv6 IGNORE_TARGET=1 EXTRA_LDFLAGS="$(ATTR)" LDPIE="" NO_ALIGNED_ALLOC=1 SHAFLAGS="-mfloat-abi=softfp" $@
 
 crtbegin_so.o: $(LIBD)/crtbegin_so.o
 	ln -sf $(LIBD)/crtbegin_dynamic.o .
@@ -42,10 +42,10 @@ configure: configure.ac
 
 config:
 	rm -f config.h crt*.o
-	$(MAKE) -f Makefile.android.arm32 config.h
+	$(MAKE) -f Makefile.android.arm32 IGNORE_TARGET=1 config.h
 
 clean:
-	$(MAKE) -f Makefile PATH=$(CBIN):$(PATH) CC="$(CC) $(CFLG)" LD="$(CC) -L $(LIBD)" MACH=armv6 LDPIE="" $@
+	$(MAKE) -f Makefile PATH=$(CBIN):$(PATH) CC="$(CC) $(CFLG)" LD="$(CC) -L $(LIBD)" MACH=armv6 IGNORE_TARGET=1 LDPIE="" $@
 	rm -f config.h crtbegin_dynamic.o crtbegin_static.o crtend_android.o crtend_so.o crtbegin_so.o
 
 TGT = dd_rescue libddr_null.so libddr_lzo.so libddr_hash.so libddr_crypt.so

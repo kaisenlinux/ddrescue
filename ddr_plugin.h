@@ -10,11 +10,18 @@
 # include "config.h"
 #endif
 
+#define _LARGEFILE64_SOURCE 1
+#define _GNU_SOURCE 1
+
 #include <sys/types.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdarg.h>
 #include <string.h>
+
+#ifdef HAVE_FCNTL_H
+#include <fcntl.h>
+#endif
 
 #if 0
 typedef struct _opt_t opt_t;
@@ -22,6 +29,20 @@ typedef struct _fstate_t fstate_t;
 typedef struct _progress_t progress_t;
 #else
 #include "ddr_ctrl.h"
+#endif
+
+/* Pull in __WORDSIZE on musl */
+#ifdef HAVE_SYS_REG_H
+#include <sys/reg.h>
+#endif
+
+#ifdef __BIONIC__
+#define strdupa(str)				\
+({						\
+	char* _mem = alloca(strlen(str)+1);	\
+	strcpy(_mem, str);			\
+	_mem;					\
+ })
 #endif
 
 /** init callback parameters:
@@ -95,19 +116,19 @@ typedef struct _ddr_plugin {
 	/* Alignment need */
 	unsigned int needs_align;
 	/* Handles sparse */
-	char handles_sparse:1;
+	unsigned char handles_sparse:1;
 	/* Transforms to unsparse */
-	char makes_unsparse:1;
+	unsigned char makes_unsparse:1;
 	/* Transforms output */
-	char changes_output:1;
+	unsigned char changes_output:1;
 	/* Output transformation changes length -- breaks sparse detection on subsequent plugins */
-	char changes_output_len:1;
+	unsigned char changes_output_len:1;
 	/* Support random access / reverse */
-	char supports_seek:1;
+	unsigned char supports_seek:1;
 	/* Don't use first non-option arg as input */
-	char replaces_input:1;
+	unsigned char replaces_input:1;
 	/* Don't use second non-option arg as output */
-	char replaces_output:1;
+	unsigned char replaces_output:1;
 	/* Internal individual state of plugin */
 	void* state;
 	/* Will be called after loading the plugin */

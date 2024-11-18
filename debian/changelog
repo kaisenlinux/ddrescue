@@ -1,3 +1,12 @@
+ddrescue (1.99.17-1kaisen) kaisen-packages; urgency=medium
+
+  * Import the 1.99.17 release
+  * Bump the debhelper-compat version
+  * Bump the Standards-Version number
+  * Drop debian/manpages and debian/docs file (no longer needed)
+
+ -- Kevin Chevreuil - Kaisen <kaisen@kaisenlinux.org>  Mon, 18 Nov 2024 23:49:10 +0100
+
 ddrescue (1.99.13-1kaisen) kaisen-packages; urgency=medium
 
   * Import the 1.99.13 version

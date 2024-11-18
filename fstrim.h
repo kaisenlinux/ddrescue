@@ -7,7 +7,11 @@
 
 void mydirnm(char* nm);
 
+#define _GNU_SOURCE 1
 #include <sys/types.h>
+#ifdef HAVE_FCNTL_H
+#include <fcntl.h>
+#endif
 #ifdef HAVE_LINUX_FS_H
 #include <linux/fs.h>
 #include <linux/types.h>

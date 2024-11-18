@@ -21,6 +21,11 @@
 #include <unistd.h>
 #include <endian.h>
 
+#ifdef HAVE_SYS_REG_H
+#include <sys/reg.h>
+#endif
+
+
 /*
 Note 1: All variables are 64 bit unsigned integers and addition is calculated modulo 2^64 
 Note 2: For each round; there is one round constant k[i] and one entry in the message schedule array w[i]; 0 ≤ i ≤ 79 
@@ -30,10 +35,41 @@ Note 4: Big-endian convention is used when expressing the constants in this pseu
 */
 
 /*
+ * Initialize array of round constants: (first 64 bits of the fractional parts of the cube roots of the first 80 primes 2..409):
+ */
+static const
+uint64_t k[] ALIGNED(64) = {
+		0x428a2f98d728ae22ULL, 0x7137449123ef65cdULL, 0xb5c0fbcfec4d3b2fULL, 0xe9b5dba58189dbbcULL,
+		0x3956c25bf348b538ULL, 0x59f111f1b605d019ULL, 0x923f82a4af194f9bULL, 0xab1c5ed5da6d8118ULL,
+		0xd807aa98a3030242ULL, 0x12835b0145706fbeULL, 0x243185be4ee4b28cULL, 0x550c7dc3d5ffb4e2ULL,
+		0x72be5d74f27b896fULL, 0x80deb1fe3b1696b1ULL, 0x9bdc06a725c71235ULL, 0xc19bf174cf692694ULL,
+		0xe49b69c19ef14ad2ULL, 0xefbe4786384f25e3ULL, 0x0fc19dc68b8cd5b5ULL, 0x240ca1cc77ac9c65ULL,
+		0x2de92c6f592b0275ULL, 0x4a7484aa6ea6e483ULL, 0x5cb0a9dcbd41fbd4ULL, 0x76f988da831153b5ULL,
+		0x983e5152ee66dfabULL, 0xa831c66d2db43210ULL, 0xb00327c898fb213fULL, 0xbf597fc7beef0ee4ULL,
+		0xc6e00bf33da88fc2ULL, 0xd5a79147930aa725ULL, 0x06ca6351e003826fULL, 0x142929670a0e6e70ULL,
+		0x27b70a8546d22ffcULL, 0x2e1b21385c26c926ULL, 0x4d2c6dfc5ac42aedULL, 0x53380d139d95b3dfULL,
+		0x650a73548baf63deULL, 0x766a0abb3c77b2a8ULL, 0x81c2c92e47edaee6ULL, 0x92722c851482353bULL,
+		0xa2bfe8a14cf10364ULL, 0xa81a664bbc423001ULL, 0xc24b8b70d0f89791ULL, 0xc76c51a30654be30ULL,
+		0xd192e819d6ef5218ULL, 0xd69906245565a910ULL, 0xf40e35855771202aULL, 0x106aa07032bbd1b8ULL,
+		0x19a4c116b8d2d0c8ULL, 0x1e376c085141ab53ULL, 0x2748774cdf8eeb99ULL, 0x34b0bcb5e19b48a8ULL,
+		0x391c0cb3c5c95a63ULL, 0x4ed8aa4ae3418acbULL, 0x5b9cca4f7763e373ULL, 0x682e6ff3d6b2b8a3ULL,
+		0x748f82ee5defb2fcULL, 0x78a5636f43172f60ULL, 0x84c87814a1f0ab72ULL, 0x8cc702081a6439ecULL,
+		0x90befffa23631e28ULL, 0xa4506cebde82bde9ULL, 0xbef9a3f7b2c67915ULL, 0xc67178f2e372532bULL,
+		0xca273eceea26619cULL, 0xd186b8c721c0c207ULL, 0xeada7dd6cde0eb1eULL, 0xf57d4f7fee6ed178ULL,
+		0x06f067aa72176fbaULL, 0x0a637dc5a2c898a6ULL, 0x113f9804bef90daeULL, 0x1b710b35131c471bULL,
+		0x28db77f523047d84ULL, 0x32caab7b40c72493ULL, 0x3c9ebe0a15c9bebcULL, 0x431d67c49c100d4cULL,
+		0x4cc5d4becb3e42b6ULL, 0x597f299cfc657e2aULL, 0x5fcb6fab3ad6faecULL, 0x6c44198c4a475817ULL
+};
+
+/*
  * Initialize hash values: (first 64 bits of the fractional parts of the square roots of the first 8 primes 2..19): 
  */
 void sha512_init(hash_t *ctx)
 {
+	/* Prefetch k */
+	int koff;
+	for (koff = 0; koff < sizeof(k)/sizeof(*k); koff += 64/sizeof(*k))
+		__builtin_prefetch(k+koff, 0, 3);
 	//memset((uint8_t*)ctx, 0, sizeof(hash_t));
 	ctx->sha512_h[0] = 0x6a09e667f3bcc908ULL;
 	ctx->sha512_h[1] = 0xbb67ae8584caa73bULL;
@@ -47,6 +83,10 @@ void sha512_init(hash_t *ctx)
 
 void sha384_init(hash_t *ctx)
 {
+	/* Prefetch k */
+	int koff;
+	for (koff = 0; koff < sizeof(k)/sizeof(*k); koff += 64/sizeof(*k))
+		__builtin_prefetch(k+koff, 0, 3);
 	//memset((uint8_t*)ctx, 0, sizeof(hash_t));
 	ctx->sha512_h[0] = 0xcbbb9d5dc1059ed8ULL;
 	ctx->sha512_h[1] = 0x629a292a367cd507ULL;
@@ -57,32 +97,6 @@ void sha384_init(hash_t *ctx)
 	ctx->sha512_h[6] = 0xdb0c2e0d64f98fa7ULL;
 	ctx->sha512_h[7] = 0x47b5481dbefa4fa4ULL;
 }
-
-/* 
- * Initialize array of round constants: (first 64 bits of the fractional parts of the cube roots of the first 80 primes 2..409):
- */
-static const
-uint64_t k[] ={ 0x428a2f98d728ae22ULL, 0x7137449123ef65cdULL, 0xb5c0fbcfec4d3b2fULL, 0xe9b5dba58189dbbcULL, 
-		0x3956c25bf348b538ULL, 0x59f111f1b605d019ULL, 0x923f82a4af194f9bULL, 0xab1c5ed5da6d8118ULL,
-	       	0xd807aa98a3030242ULL, 0x12835b0145706fbeULL, 0x243185be4ee4b28cULL, 0x550c7dc3d5ffb4e2ULL, 
-		0x72be5d74f27b896fULL, 0x80deb1fe3b1696b1ULL, 0x9bdc06a725c71235ULL, 0xc19bf174cf692694ULL, 
-		0xe49b69c19ef14ad2ULL, 0xefbe4786384f25e3ULL, 0x0fc19dc68b8cd5b5ULL, 0x240ca1cc77ac9c65ULL, 
-		0x2de92c6f592b0275ULL, 0x4a7484aa6ea6e483ULL, 0x5cb0a9dcbd41fbd4ULL, 0x76f988da831153b5ULL, 
-		0x983e5152ee66dfabULL, 0xa831c66d2db43210ULL, 0xb00327c898fb213fULL, 0xbf597fc7beef0ee4ULL, 
-		0xc6e00bf33da88fc2ULL, 0xd5a79147930aa725ULL, 0x06ca6351e003826fULL, 0x142929670a0e6e70ULL, 
-		0x27b70a8546d22ffcULL, 0x2e1b21385c26c926ULL, 0x4d2c6dfc5ac42aedULL, 0x53380d139d95b3dfULL, 
-		0x650a73548baf63deULL, 0x766a0abb3c77b2a8ULL, 0x81c2c92e47edaee6ULL, 0x92722c851482353bULL, 
-		0xa2bfe8a14cf10364ULL, 0xa81a664bbc423001ULL, 0xc24b8b70d0f89791ULL, 0xc76c51a30654be30ULL, 
-		0xd192e819d6ef5218ULL, 0xd69906245565a910ULL, 0xf40e35855771202aULL, 0x106aa07032bbd1b8ULL, 
-		0x19a4c116b8d2d0c8ULL, 0x1e376c085141ab53ULL, 0x2748774cdf8eeb99ULL, 0x34b0bcb5e19b48a8ULL, 
-		0x391c0cb3c5c95a63ULL, 0x4ed8aa4ae3418acbULL, 0x5b9cca4f7763e373ULL, 0x682e6ff3d6b2b8a3ULL, 
-		0x748f82ee5defb2fcULL, 0x78a5636f43172f60ULL, 0x84c87814a1f0ab72ULL, 0x8cc702081a6439ecULL, 
-		0x90befffa23631e28ULL, 0xa4506cebde82bde9ULL, 0xbef9a3f7b2c67915ULL, 0xc67178f2e372532bULL, 
-		0xca273eceea26619cULL, 0xd186b8c721c0c207ULL, 0xeada7dd6cde0eb1eULL, 0xf57d4f7fee6ed178ULL, 
-		0x06f067aa72176fbaULL, 0x0a637dc5a2c898a6ULL, 0x113f9804bef90daeULL, 0x1b710b35131c471bULL, 
-		0x28db77f523047d84ULL, 0x32caab7b40c72493ULL, 0x3c9ebe0a15c9bebcULL, 0x431d67c49c100d4cULL, 
-		0x4cc5d4becb3e42b6ULL, 0x597f299cfc657e2aULL, 0x5fcb6fab3ad6faecULL, 0x6c44198c4a475817ULL
-};
 
 #if !defined(HAVE_UNALIGNED_HANDLING)
 /* Read val from little-endian array */
@@ -117,28 +131,29 @@ static inline uint64_t htonll(const uint64_t x)
  * break message into 1024-bit chunks 
  * (The initial values in w[0..79] don't matter, so many implementations zero them here) 
  */
-void sha512_128(const uint8_t* msg, hash_t* ctx)
+static inline void __sha512_128(const uint8_t* msg, hash_t* ctx, const char clear)
 {
  	/* for each chunk create a 80-entry message schedule array w[0..79] of 64-bit words */
-	uint64_t w[80];
+	uint64_t w[80] ALIGNED(64);
+	int i;
 #ifdef __ANALYZER__
 	/* -fanalyzer is not clever enough to see that initializing the first 16 ints is enough */
-	memset(w, 0, sizeof(w));
+	memset(w+16, 0, sizeof(w)-16*sizeof(*w));
 #endif
  	/* copy chunk into first 16 words w[0..15] of the message schedule array */
 #if 0
 	memcpy(w, msg, 64);
 #else
 #if defined(HAVE_UNALIGNED_HANDLING)
-	for (int i = 0; i < 16; ++i)
+	for (i = 0; i < 16; ++i)
 		w[i] = htonll(*(uint64_t*)(msg+8*i));
 #else
-	for (int i = 0; i < 16; ++i)
+	for (i = 0; i < 16; ++i)
 		w[i] = to_int64_be(msg+8*i);
 #endif
 #endif
 	/* Extend the first 16 words into the remaining 48 words w[16..63] of the message schedule array: */
-	for (int i = 16; i < 80;  ++i) {
+	for (i = 16; i < 80;  ++i) {
 		const uint64_t s0 = RIGHTROTATE(w[i-15], 1) ^ RIGHTROTATE(w[i-15], 8) ^ (w[i-15] >> 7);
 		const uint64_t s1 = RIGHTROTATE(w[i-2], 19) ^ RIGHTROTATE(w[i-2] ,61) ^ (w[i-2]  >> 6);
 		w[i] = w[i-16] + s0 + w[i-7] + s1;
@@ -147,7 +162,7 @@ void sha512_128(const uint8_t* msg, hash_t* ctx)
 	uint64_t a = ctx->sha512_h[0], b = ctx->sha512_h[1], c = ctx->sha512_h[2], d = ctx->sha512_h[3];
 	uint64_t e = ctx->sha512_h[4], f = ctx->sha512_h[5], g = ctx->sha512_h[6], h = ctx->sha512_h[7];
 	/* Compression function main loop: */
-	for (int i = 0; i < 80; ++i) {
+	for (i = 0; i < 80; ++i) {
 		const uint64_t S1 = RIGHTROTATE(e, 14) ^ RIGHTROTATE(e, 18) ^ RIGHTROTATE(e, 41);
 		//const uint64_t ch = (e & f) ^ ((~e) & g);
 		const uint64_t ch = g ^ (e & (f ^ g));
@@ -156,16 +171,40 @@ void sha512_128(const uint8_t* msg, hash_t* ctx)
 		//const uint64_t maj = (a & b) ^ (a & c) ^ (b & c);
 		const uint64_t maj = (a & b) | (c & (a | b));
 		const uint64_t temp2 = S0 + maj;
+		++i;
 
 		h = g; g = f; f = e;
 		e = d + temp1;
 		d = c; c = b; b = a;
 		a = temp1 + temp2;
+
+		const uint64_t S1_ = RIGHTROTATE(e, 14) ^ RIGHTROTATE(e, 18) ^ RIGHTROTATE(e, 41);
+		const uint64_t ch_ = g ^ (e & (f ^ g));
+		const uint64_t temp1_ = h + S1_ + ch_ + k[i] + w[i];
+		const uint64_t S0_ = RIGHTROTATE(a, 28) ^ RIGHTROTATE(a, 34) ^ RIGHTROTATE(a, 39);
+		const uint64_t maj_ = (a & b) | (c & (a | b));
+		const uint64_t temp2_ = S0_ + maj_;
+
+		h = g; g = f; f = e;
+		e = d + temp1_;
+		d = c; c = b; b = a;
+		a = temp1_ + temp2_;
+	}
+	/* Clear w */
+	if (clear) {
+		memset(w, 0, sizeof(w));
+		asm(""::"r"(w):"0");
 	}
 	/* Add the compressed chunk to the current hash value: */
 	ctx->sha512_h[0] += a; ctx->sha512_h[1] += b; ctx->sha512_h[2] += c; ctx->sha512_h[3] += d;
 	ctx->sha512_h[4] += e; ctx->sha512_h[5] += f; ctx->sha512_h[6] += g; ctx->sha512_h[7] += h;
 }
+
+void sha512_128(const uint8_t* msg, hash_t* ctx)
+{
+	__sha512_128(msg, ctx, 0);
+}
+
 
 #if __WORDSIZE == 64
 #define LL "l"
@@ -179,11 +218,11 @@ static char _sha512_res[129];
 static inline 
 char* sha5xx_hexout(char *buf, const hash_t *ctx, int wd)
 {
+	int i;
 	/* Produce the final hash value (big-endian): */ 
 	//digest := hash := h0 append h1 append h2 append h3 append h4 append h5 append h6 append h7
 	if (!buf)
 		buf = _sha512_res;
-	int i;
 	*buf = 0;
 	for (i = 0; i < wd; ++i) {
 		char res[17];
@@ -206,8 +245,9 @@ char* sha384_hexout(char *buf, const hash_t* ctx)
 static inline
 unsigned char* sha5xx_beout(unsigned char *buf, const hash_t *ctx, int wd)
 {
+	int i;
 	assert(buf);
-	for (int i = 0; i < wd; ++i)
+	for (i = 0; i < wd; ++i)
 		*((uint64_t*)buf+i) = htonll(ctx->sha512_h[i]);
 	return buf;
 }
@@ -245,13 +285,19 @@ static void output(unsigned char* ptr, int ln)
  */
 void sha512_calc(const uint8_t *ptr, size_t chunk_ln, size_t final_len, hash_t *ctx)
 {
+	__builtin_prefetch(ptr, 0, 2);
+	__builtin_prefetch(ptr+64, 0, 2);
+	__builtin_prefetch(ptr+128, 0, 2);
+	__builtin_prefetch(ptr+192, 0, 2);
+	/* ctx and k should be cache-hot already */
+	//__builtin_prefetch(ctx->sha512_h, 0, 3);
 	size_t offset;
 	for (offset = 0; offset+128 <= chunk_ln; offset += 128)
 		sha512_128(ptr + offset, ctx);
 	if (offset == chunk_ln && final_len == (size_t)-1)
 		return;
 	const int remain = chunk_ln - offset;
-	uint8_t sha512_buf[128];
+	static uint8_t sha512_buf[128];
 	if (remain)
 		memcpy(sha512_buf, ptr+offset, remain);
 	memset(sha512_buf+remain, 0, 128-remain);
@@ -269,23 +315,23 @@ void sha512_calc(const uint8_t *ptr, size_t chunk_ln, size_t final_len, hash_t *
 	*(uint32_t*)(sha512_buf+116) = htonl(final_len >> 61);
 	*(uint32_t*)(sha512_buf+120) = htonl(final_len >> 29);
 	*(uint32_t*)(sha512_buf+124) = htonl(final_len <<  3);
-	sha512_128(sha512_buf, ctx);
+	__sha512_128(sha512_buf, ctx, 1);
 }
 
 #ifdef SHA512_MAIN
 #include <sys/stat.h>
-#include <libgen.h>
 #include <unistd.h>
 #include <fcntl.h>
 #include <errno.h>
 #include <stdlib.h>
+#include "mybasename.h"
 #define BUFSIZE 65536
 int main(int argc, char **argv)
 {
 	hash_t ctx;
 
 	char is_sha384 = 0;
-	if (!strcmp(basename(argv[0]), "sha384"))
+	if (!strcmp(mybasename(argv[0]), "sha384"))
 	       is_sha384 = 1;
 
 	if (argc < 2) {
@@ -293,8 +339,8 @@ int main(int argc, char **argv)
 		return 1;
 	}
 
-
 	uint8_t *obf = (uint8_t *)malloc(BUFSIZE + 256);
+	//memset(obf, 0, BUFSIZE+256);
 	uint8_t *bf = obf;
 #if defined(HAVE___BUILTIN_PREFETCH) && !defined(NO_ALIGN)
 	bf += 127;

@@ -12,6 +12,10 @@
 #include <string.h>
 
 
+/* Find directory name of file nm
+ * if there is no '/' in the nm, then
+ * replace with current directory.
+ */
 void mydirnm(char* nm)
 {
 	char* last = nm+strlen(nm)-1;
@@ -31,6 +35,7 @@ void mydirnm(char* nm)
 #include <unistd.h>
 #include <errno.h>
 
+/* Issue FITRIM ioctl */
 loff_t fstrim(const char* onm, char quiet)
 {
 	char* dirnm = strdup(onm);
@@ -45,6 +50,7 @@ loff_t fstrim(const char* onm, char quiet)
 	}
 	trim.start = 0;
 	trim.len = (__u64)(-1);
+	/* 16k holes are worth the effort, smaller ones probably not */
 	trim.minlen = 16384;
 	if (!quiet) {
 		fprintf(stderr, "dd_rescue: FITRIM %s ...\r", dirnm); 
@@ -56,7 +62,7 @@ loff_t fstrim(const char* onm, char quiet)
 	return (trimerr? -errno: trim.len);
 }
 #else
-# warning compiling fstrim only makes sense with FITRI support
+# warning compiling fstrim only makes sense with FITRIM support
 #endif
 
 

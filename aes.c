@@ -268,6 +268,7 @@ void be_inc(uchar ctr[8])
 	// } while (i > 4 && !ctr[i]);
 }
 
+#if 0
 static inline 
 void be_inc4(uchar ctr[8])
 {
@@ -290,6 +291,7 @@ void be4_inc4(uchar ctr[64])
 	be_inc4(ctr+40);
 	be_inc4(ctr+56);
 }
+#endif
 
 int  AES_Gen_CTR_Crypt(AES_Crypt_Blk_fn *cryptfn,
 			const uchar *rkeys, uint rounds,

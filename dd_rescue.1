@@ -756,7 +756,10 @@ it's not considered strong enough any more to prevent hash collisions.
 sha1 is a bit better, but has been broken as well as of 2017.
 The recommendation is to use the SHA-2 family of hashes.
 On 32bit machines, I'd recommend sha256, while on 64bit machines, sha512
-is faster and thus the best choice.
+is faster and thus the best choice. Note that there is hardware acceleration
+on some x86-64 and most armv8/aarch64 CPUs for sha256, so it is faster
+there than sha512. dd_rescue detects and uses this acceleration (since
+1.99.16).
 .PP
 ddr_hash also supports using the HMAC code and hashes for deriving
 keys from passwords using the PKCS5 PBKDF2 (password-based key derivation
@@ -780,6 +783,12 @@ It currently supports a variety of AES ciphers.
 See the
 .BR ddr_crypt (1)
 man page for more details.
+.
+. SS ddr_lzma
+The xz de/compression plugin. Support most of popular options from xz util.
+See the
+.BR ddr_lzma (1)
+max page for more details.
 .
 .SH EXIT STATUS
 On successful completion, 

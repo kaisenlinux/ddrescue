@@ -5,12 +5,14 @@
  */
 
 #define _GNU_SOURCE 1
+#define _LARGEFILE64_SOURCE 1
 //#define _LARGEFILE_SOURCE 1
 //#define FILE_OFFSET_BITS 64
 #include <stdio.h>
 #include <sys/file.h>
 #include <unistd.h>
 #include <stdlib.h>
+#include <fcntl.h>
 #include <errno.h>
 
 #include "find_nonzero.h"

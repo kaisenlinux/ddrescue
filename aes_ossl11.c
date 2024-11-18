@@ -45,6 +45,9 @@ struct _evp_cipher_ctx_st {
     /* FIXME: Should this even exist? It appears unused */
     void *app_data;             /* application stuff */
     int key_len;                /* May change for variable length cipher */
+#if OPENSSL_VERSION_MAJOR >= 3 && (OPENSSL_VERSION_MINOR > 0 || OPENSSL_VERSION_PATCH >= 6)
+    int iv_len;                 /* IV length */
+#endif
     unsigned long flags;        /* Various flags */
     void *cipher_data;          /* per EVP data */
     int final_used;

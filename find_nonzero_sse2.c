@@ -77,16 +77,5 @@ size_t find_nonzero_sse2(const unsigned char* blk, const size_t ln)
 	return ln;
 }
 
-/** Issue an SSE2 insn for runtime detection of SSE2 capability (x86) */
-volatile __m128d _probe_xmm;
-void probe_sse2()
-{
-	double val = 3.14159265358979323844;
-	_probe_xmm = _mm_set_sd(val);
-}
-
-#else
-# warning pointless exercise compiling find_nonzero_sse2 with -msse2 ...
-#endif	/* __SSE2__ */
-#endif
-
+#endif	/* SSE2 */
+#endif /* x86 */

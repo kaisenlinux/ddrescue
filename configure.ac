@@ -11,9 +11,12 @@ AC_C_INLINE
 
 #AC_PROG_INSTALL
 #CFLAGS="$CFLAGS -DHAVE_CONFIG_H"
-AC_CHECK_HEADERS([fallocate.h dlfcn.h unistd.h sys/xattr.h attr/xattr.h sys/acl.h sys/ioctl.h endian.h linux/fs.h linux/fiemap.h stdint.h lzo/lzo1x.h openssl/evp.h linux/random.h sys/random.h malloc.h sched.h sys/statvfs.h sys/resource.h sys/endian.h linux/swab.h])
-AC_CHECK_FUNCS([ffs ffsl basename fallocate64 splice getopt_long open64 pread pread64 lseek64 stat64 posix_fadvise posix_fadvise64 __builtin_prefetch htonl htobe64 feof_unlocked getline getentropy getrandom posix_memalign valloc sched_yield fstatvfs __builtin_cpu_supports getrlimit aligned_alloc])
+#CFLAGS="$CFLAGS -D_LARGEFILE64_SOURCE=1"
+AC_CHECK_HEADERS([fallocate.h dlfcn.h unistd.h libgen.h sys/xattr.h attr/xattr.h sys/acl.h sys/ioctl.h endian.h linux/fs.h linux/fiemap.h stdint.h lzo/lzo1x.h lzma.h openssl/evp.h linux/random.h sys/random.h malloc.h sched.h sys/statvfs.h sys/resource.h sys/endian.h linux/swab.h sys/user.h fcntl.h sys/reg.h arm_acle.h])
+AC_CHECK_FUNCS([ffs ffsl basename splice getopt_long pread posix_fadvise htonl htobe64 feof_unlocked getline getentropy getrandom posix_memalign valloc sched_yield fstatvfs getrlimit aligned_alloc])
 AC_CHECK_LIB(dl,dlsym)
+AC_CHECK_LIB(lzma,lzma_easy_encoder)
+#AC_CHECK_LIB(lzma,init_lzma_stream)
 AC_CHECK_LIB(fallocate,linux_fallocate64)
 AC_CHECK_LIB(lzo2,lzo1x_1_compress)
 AC_CHECK_LIB(crypto,EVP_aes_192_ctr)
@@ -45,7 +48,8 @@ CC_FLAGS_CHECK(-mavx2,AVX2)
 CC_FLAGS_CHECK(-mrdrnd,RDRND)
 CC_FLAGS_CHECK(-maes,AES)
 
-CFLAGS="$CFLAGS -D_FORTIFY_SOURCE=2 -fPIE -pie -rdynamic"
+#CFLAGS="$CFLAGS -U_FORTIFY_SOURCE -D_FORTIFY_SOURCE=2 -fPIE -pie -rdynamic"
+CFLAGS="$CFLAGS -fPIE"
 dnl ***************************************************************************
 dnl Check for support of rep nop
 AC_MSG_CHECKING(whether asm rep nop is supported)
@@ -60,10 +64,10 @@ AC_RUN_IFELSE([AC_LANG_SOURCE([[
 	AC_DEFINE_UNQUOTED([HAVE_REP_NOP], 1,
 		[check whether asm rep nop works])
 ],[
-	AC_MSG_RESULT(yes)
+	AC_MSG_RESULT(no)
 ],[
 	AC_MSG_RESULT(no -- cross compiling)
-])
+	])
 
 dnl ***************************************************************************
 dnl Check for support of rep nop
@@ -79,9 +83,41 @@ AC_RUN_IFELSE([AC_LANG_SOURCE([[
 	AC_DEFINE_UNQUOTED([HAVE_LFENCE], 1,
 		[check whether asm lfence works])
 ],[
-	AC_MSG_RESULT(yes)
+	AC_MSG_RESULT(no)
 ],[
 	AC_MSG_RESULT(no -- cross compiling)
+])
+
+dnl Check for __attribute__((aligned(N))) support
+AC_MSG_CHECKING(whether we support __attribute__((aligned)))
+AC_COMPILE_IFELSE([AC_LANG_SOURCE([[
+	typedef unsigned long aligned_ulong __attribute__((aligned(64)));
+]])],[
+	AC_MSG_RESULT(yes)
+	AC_DEFINE_UNQUOTED([HAVE_ALIGNED_ATTR], 1,
+		[whether we support __attribute__((aligned(N)))])
+],[
+	AC_MSG_RESULT(no)
+])
+
+dnl Check for Android min SDK
+AC_MSG_CHECKING(the need for android min SDK setting)
+AC_COMPILE_IFELSE([AC_LANG_SOURCE([[
+	#include <stdlib.h>
+	#include <stdio.h>
+	#if defined(__ANDROID_MIN_SDK_VERSION__) && __ANDROID_MIN_SDK_VERSION__ < 28
+	#ifdef __aarch64__
+	#error need -target linux-aarch64-android28
+	#else
+	#error need -target linux-arm-android28
+	#endif
+	#endif
+]])],[
+	AC_MSG_RESULT(no)
+],[
+	AC_DEFINE_UNQUOTED([NEED_ANDROID_TARGET], 1,
+		[check whether we need to pass -target])
+	AC_MSG_RESULT(yes)
 ])
 
 dnl Check for bionic aligned_alloc failure
@@ -171,6 +207,10 @@ AC_RUN_IFELSE([AC_LANG_SOURCE([[
 	 fprintf(stderr, "Debug: Off %i, Ptr %08lx\n", off, (unsigned long)ptr);
 	 copy((int*)b2, (const int*)ptr, 4);
 	 fprintf(stderr, "Ints: %08x %08x %08x %08x\n", *(int*)b2, *(int*)(b2+4), *(int*)(b2+8), *(int*)(b2+12));
+	 /* HACK: Somehow this test does no longer trigger with gcc-12 on armhf, but it should */
+	 #ifdef __arm__
+	 return 1;
+	 #endif
 	 return 0;
 	}
 ]])],[
@@ -183,6 +223,45 @@ AC_RUN_IFELSE([AC_LANG_SOURCE([[
 	AC_MSG_RESULT(no -- cross-compiling)
 ])
 
+dnl @synopsis CC_COMPILE64_CHECK [compiler flags] 
+dnl @summary check whether compiler links ..64 function
+AC_DEFUN([CC_COMPILE64_CHECK],
+[dnl 
+  AC_MSG_CHECKING([if we can link $1]) 
+  dnl AC_LANG_PUSH([C]) 
+  ac_saved_cflags="$CFLAGS"
+  CFLAGS="$CFLAGS -D_LARGEFILE64_SOURCE=1 -D_GNU_SOURCE=1"
+  AC_COMPILE_IFELSE([AC_LANG_SOURCE([
+	#include <unistd.h>
+	#include <fcntl.h>
+	#include <sys/stat.h>
+	int main() {
+	long res = $1$2;
+	return res;
+	}
+	])], 
+    [AC_MSG_RESULT([yes])
+     AC_DEFINE_UNQUOTED([HAVE_$3], 1,
+	[Check whether we can link $1])
+    ],
+    [AC_MSG_RESULT([no])
+     dnl AC_MSG_ERROR([no])
+     dnl AC_DEFINE_UNQUOTED([HAVE_$3], , [No library support for $1])
+    ] )
+  CFLAGS="$ac_saved_cflags" 
+  dnl AC_LANG_POP([C]) 
+])
+
+#AC_CHECK_FUNCS([fallocate64 open64 pread64 lseek64 stat64 posix_fadvise64 __builtin_prefetch __builtin_cpu_supports])
+CC_COMPILE64_CHECK(fallocate64, (1, 0, (off64_t)0, (off64_t)0), FALLOCATE64)
+CC_COMPILE64_CHECK(open64, ("", 0), OPEN64)
+CC_COMPILE64_CHECK(pread64, (1, (void*)1, (size_t)0, (off64_t)0), PREAD64)
+CC_COMPILE64_CHECK(pwrite64, (1, (void*)1, (size_t)0, (off64_t)0), PWRITE64)
+CC_COMPILE64_CHECK(lseek64, (1, (off64_t)0, 0), LSEEK64)
+CC_COMPILE64_CHECK(stat64, ("", (struct stat64*)1), STAT64)
+CC_COMPILE64_CHECK(posix_fadvise64, (0, (off64_t)0, (off64_t)0, 0), POSIX_FADVISE64)
+CC_COMPILE64_CHECK(0; __builtin_prefetch, ((void*)1, 0), __BUILTIN_PREFETCH)
+CC_COMPILE64_CHECK(__builtin_cpu_supports, ("aes"), __BUILTIN_CPU_SUPPORTS)
 
 AC_OUTPUT
 dnl link (if needed) Makefile configure.ac test_crypt.sh test_lzo_fuzz.sh
