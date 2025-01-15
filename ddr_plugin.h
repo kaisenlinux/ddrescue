@@ -10,7 +10,9 @@
 # include "config.h"
 #endif
 
+#define _LARGEFILE_SOURCE 1
 #define _LARGEFILE64_SOURCE 1
+#define _FILE_OFFSET_BITS 64
 #define _GNU_SOURCE 1
 
 #include <sys/types.h>
@@ -45,12 +47,17 @@ typedef struct _progress_t progress_t;
  })
 #endif
 
+#define RECALL_NONE -1
+#define RECALL_NA 0
+#define RECALL_MARK 1
+
 /** init callback parameters:
  * opaque handle, parameters from commandline, sequence in filter chain,
  * pointer to options.
  * Return value: 0 = OK, -x = ERROR
  */
 typedef int (_init_callback)(void **stat, char* param, int seq, const opt_t *opt);
+
 /** open_callback parameters: pointer to options, four flags telling the
  * 	plugin whether length, and/or contents of the stream are changed
  * 	by other plugins before (i) or after (o) this one,
@@ -61,17 +68,21 @@ typedef int (_init_callback)(void **stat, char* param, int seq, const opt_t *opt
 typedef int (_open_callback)(const opt_t *opt, int ilnchange, int olnchange, 
 			     int ichange, int ochange,
 			     unsigned int totslack_pre, unsigned int totslack_post,
-			     const fstate_t *fst, void **stat);
+			     const fstate_t *fst, void **stat, int islast);
+
 /** block_callback parameters: file state (contains file descriptors, positions,
  * 	...), buffer to be written (can be modified),
  *  	number of bytes to be written (can be null and can be modified), 
  *  	eof flag, recall request(output!), handle.
  *  Will be called with eof=1 exactly once at the end.
+ *  *recall can be set to RECALL_MARK to indicate we should
+ *  be called again without new data.
  *  Return value: buffer to be really written.
  */
 typedef unsigned char* (_block_callback)(fstate_t *fst, unsigned char* bf, 
 					 int *towr, int eof, int *recall, 
 					 void **stat);
+
 /** close_callback parameters: final output position and handle.
  * Return value: 0 = OK, -x = ERROR
  * close_callback is called before files are fsynced and closed
@@ -85,7 +96,7 @@ typedef int (_close_callback)(loff_t ooff, void **stat);
 typedef int (_release_callback)(void **stat);
 
 
-enum ddrlog_t { NOHDR=0, DEBUG, INFO, WARN, FATAL, GOOD, INPUT };
+enum ddrlog_t { NOHDR=0, DEBUG, INFO, WARN, GOOD, FATAL, INPUT };
 typedef int (_fplog_upcall)(FILE* const f, enum ddrlog_t logpre, 
 			    const char* const prefix, const char* const fmt, 
 			    va_list va);
@@ -95,17 +106,37 @@ typedef struct _plug_logger {
 	char prefix[24];
 } plug_logger_t;
 
+extern int ddr_loglevel;
 
 static inline 
-int plug_log(plug_logger_t *logger, FILE* const f, enum ddrlog_t logpre,
-		const char* const fmt, ...)
+int plug_log(plug_logger_t *logger, int seq, FILE* const f,
+		enum ddrlog_t logpre, const char* const fmt, ...)
 {
-	va_list vag;
-	va_start(vag, fmt);
-	int ret = logger->vfplog(f, logpre, logger->prefix, fmt, vag);
-	va_end(vag);
+	int ret = 0;
+	if (logpre >= ddr_loglevel) {
+		char prefix[32];
+		strcpy(prefix, logger->prefix);
+		int ln = strlen(prefix);
+		snprintf(prefix+ln, 8, " (%2i): ", seq);
+		va_list vag;
+		va_start(vag, fmt);
+		ret = logger->vfplog(f, logpre, prefix, fmt, vag);
+		va_end(vag);
+	}
 	return ret;
 }
+
+/* 64bit abs */
+static inline
+loff_t off_labs(const loff_t diff)
+{
+	if (diff < 0)
+		return -diff;
+	else
+		return  diff;
+}
+
+
 
 typedef struct _ddr_plugin {
 	/* Will be filled by loader */

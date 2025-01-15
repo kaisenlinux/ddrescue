@@ -276,7 +276,7 @@ over, this will result in an incomplete copy in that the output file is
 different from the input file at the location where blocks of zeroes 
 were skipped over.
 .B dd_rescue
-tries to detect this and issue a warning, but it does not prevent this
+tries to detect this and issues a warning, but it does not prevent this
 from happening
 .TP 8
 .BR \-W ", " \-\-avoidwrite
@@ -316,16 +316,16 @@ used.) This option may be used to ensure that all empty
 blocks of a file system are filled with zeros (rather than containing 
 fragments of deleted files with possibly sensitive information).
 .br
-The FITRIM ioctl (on Linux) tells the flash storage to consider
-the freed space as unused (like the fstrim tool or the discard
-option) by issuing ATA TRIM commands. This will only succeed with
-superuser privileges (but the error can otherwise be safely
+The FITRIM ioctl (on Linux) tells the storage to consider the freed
+space as unused (like the fstrim tool or the discard option) by
+issuing ATA TRIM or SCS DISCARD/WRITE_SAME commands. This will only
+succeed with superuser privileges (but the error can otherwise be safely
 ignored). This is useful to ensure full performance of flash
-memory / SSDs. Note that FITRIM can take a while on large
-file systems, especially if the file systems are not mounted with
-the discard option and have not been trimmed (with e.g. fstrim)
-for a while. Not all file systems and not all flash-based storage
-support this.
+memory / SSDs or to free up space on thinly provisioned storage.
+Note that FITRIM can take a while on large file systems, especially if
+the file systems are not mounted with the discard option and have not
+been trimmed (with e.g. fstrim) for a while. Not all file systems and
+not all flash-based storage support this.
 .TP 8
 .BR \-k ", " \-\-splice
 tells
@@ -769,6 +769,13 @@ is only meant for testing and may be removed in the future. It's thus
 not documented in this man page. See
 the built-in help function for a brief summary on the usage.
 .
+. SS crypt
+The crypt plugin allows to encrypt and decrypt data on the fly.
+It currently supports a variety of AES ciphers.
+See the
+.BR ddr_crypt (1)
+man page for more details.
+.
 .SS lzo
 The lzo plugin allows to compress and decompress data using liblzo2.
 lzo is an algorithm that is faster than most other algorithms but
@@ -777,18 +784,14 @@ See the
 .BR ddr_lzo (1)
 man page for more details.
 .
-. SS crypt
-The crypt plugin allows to encrypt and decrypt data on the fly.
-It currently supports a variety of AES ciphers.
-See the
-.BR ddr_crypt (1)
-man page for more details.
-.
 . SS ddr_lzma
-The xz de/compression plugin. Support most of popular options from xz util.
+The xz de/compression plugin using liblzma. Supports most of popular
+options from the xz utils. lzma is an algorithm that produces highly
+compressed files at the cost of being expensive in terms of CPU and
+memory consumption during compression. Decompression is fast.
 See the
 .BR ddr_lzma (1)
-max page for more details.
+man page for more details.
 .
 .SH EXIT STATUS
 On successful completion, 

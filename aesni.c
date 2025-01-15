@@ -1127,8 +1127,8 @@ int AESNI_CTR_Crypt_Tmpl(crypt_8blks_fn *crypt8, crypt_blk_fn *crypt,
 #ifdef AESNI_PREFETCH
 		__builtin_prefetch(outptr, 1, 3);
 		__builtin_prefetch(outptr+4, 1, 3);
-		__builtin_prefetch(inptr, 0, 1);
-		__builtin_prefetch(inptr+4, 0, 1);
+		//__builtin_prefetch(inptr, 0, 1);
+		//__builtin_prefetch(inptr+4, 0, 1);
 #endif
 		/* Prepare CTR (IV) values */
 		__m128i tmp0 = _mm_shuffle_epi8(cblk, BSWAP_EPI64);
@@ -1223,8 +1223,8 @@ int AESNI_CTR_Crypt_Tmpl2(crypt_4x2blks_fn *crypt4, crypt_blk_fn *crypt,
 #ifdef AESNI_PREFETCH
 		__builtin_prefetch(outptr, 1, 3);
 		__builtin_prefetch(outptr+2, 1, 3);
-		__builtin_prefetch(inptr, 0, 1);
-		__builtin_prefetch(inptr+2, 0, 1);
+		//__builtin_prefetch(inptr, 0, 1);
+		//__builtin_prefetch(inptr+2, 0, 1);
 #endif
 		/* Prepare CTR (IV) values */
 		tmp0 = _mm256_shuffle_epi8(cblk, BSWAP_BOTH);

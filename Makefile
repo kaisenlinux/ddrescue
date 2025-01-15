@@ -1,7 +1,7 @@
 # (c) garloff@suse.de, 99/10/09, GNU GPL
 # (c) kurt@garloff.de, 2010 -- 2021, GNU GPL v2 or v3
 
-VERSION = 1.99.17
+VERSION = 1.99.20
 
 DESTDIR = 
 SRCDIR ?= .
@@ -627,6 +627,7 @@ check: $(TARGETS) find_nonzero md5 sha1 sha256 sha512 fmt_no
 	$(MAKE) check_fault
 	#$(MAKE) check_aes
 	$(MAKE) check_crypt
+	$(MAKE) check_sparse
 
 check_xattr_storehash: $(TARGETS)
 	# Tests with hash set_xattr and chk_xattr (with fallback as not all filesystems support xattrs ...)
@@ -727,7 +728,7 @@ check_lzo: $(TARGETS)
 	#md5sum -c MD5
 	$(LZOP) -Nvl test.lzo
 	cat dd_rescue >> test
-	$(VG) ./dd_rescue -aL ./libddr_lzo.so,./libddr_MD5.so=output test.lzo test.cmp > MD5
+	$(VG) ./dd_rescue -taL ./libddr_lzo.so,./libddr_MD5.so=output test.lzo test.cmp > MD5
 	md5sum -c MD5
 	cmp test test.cmp
 	if type -p sha224sum >/dev/null 2>&1; then hashlist="md5 sha1 sha224 sha256 sha384 sha512"; else hashlist="md5 sha1 sha256 sha512"; fi; \
@@ -746,6 +747,31 @@ check_lzo_fuzz: $(TARGETS) fuzz_lzo
 	# Intelligent fuzzing means starting from valid .lzo, and adding
 	#  distortions, with and without fixing checksums ...
 	./test_lzo_fuzz.sh
+
+check_sparse: $(TARGETS)
+	@echo "***** dd_rescue sparse tests with plugins *****"
+	./test_sparse.sh
+	./test_sparse.sh "-L ./libddr_null.so=unsparse"
+	./test_sparse.sh "-L ./libddr_hash.so=sha256"
+	./test_sparse.sh "-L ./libddr_crypt.so=AES192-CTR:weakrnd:pbkdf2:pass=ABC:skiphole:" "encrypt" "decrypt"
+	./test_sparse.sh "-L ./libddr_crypt.so=AES192-CTR:weakrnd:pbkdf2:pass=ABC:" "encrypt" "decrypt"
+	if test $(HAVE_LZO) = 1; then ./test_sparse.sh "-L ./libddr_lzo.so=" "compress" "decompress"; fi
+	if test $(HAVE_LZMA) = 1; then ./test_sparse.sh "-L ./libddr_lzma.so=" "compress" "decompress"; fi
+	# Sparse files with odd sizes
+	./test_sparse.sh "-L ./libddr_null.so=unsparse" "" "" 8388612
+	./test_sparse.sh "-L ./libddr_hash.so=sha256" "" "" 8388612
+	./test_sparse.sh "-L ./libddr_crypt.so=AES192-CTR:weakrnd:pbkdf2:pass=ABC:skiphole:" "encrypt" "decrypt" 8388612
+	./test_sparse.sh "-L ./libddr_crypt.so=AES192-CTR:weakrnd:pbkdf2:pass=ABC:" "encrypt" "decrypt" 8388612
+	if test $(HAVE_LZO) = 1; then ./test_sparse.sh "-L ./libddr_lzo.so=" "compress" "decompress" 8388612; fi
+	if test $(HAVE_LZMA) = 1; then ./test_sparse.sh "-L ./libddr_lzma.so=" "compress" "decompress" 8388612; fi
+	# Sparse files with holes at end and at beginning
+	./test_sparse.sh "" "" "" 7596032 1
+	./test_sparse.sh "-L ./libddr_null.so=unsparse" "" "" 7596032 1
+	./test_sparse.sh "-L ./libddr_hash.so=sha256" "" "" 7596032 1
+	./test_sparse.sh "-L ./libddr_crypt.so=AES192-CTR:weakrnd:pbkdf2:pass=ABC:skiphole:" "encrypt" "decrypt" 7596032 1
+	./test_sparse.sh "-L ./libddr_crypt.so=AES192-CTR:weakrnd:pbkdf2:pass=ABC:" "encrypt" "decrypt" 7596032 1
+	if test $(HAVE_LZO) = 1; then ./test_sparse.sh "-L ./libddr_lzo.so=" "compress" "decompress" 7596032 1; fi
+	if test $(HAVE_LZMA) = 1; then ./test_sparse.sh "-L ./libddr_lzma.so=" "compress" "decompress" 7596032 1; fi
 
 
 ALGS = AES128-ECB AES128-CBC AES128-CTR AES128+-ECB AES128+-CBC AES128+-CTR AES128x2-ECB AES128x2-CBC AES128x2-CTR \

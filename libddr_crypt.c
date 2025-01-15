@@ -70,9 +70,11 @@
 //char have_aesni;
 #endif
 
-
+#define FPLOG_(seq, lvl, fmt, args...) \
+	plug_log(ddr_plug.logger, seq, stderr, lvl, fmt, ##args)
 #define FPLOG(lvl, fmt, args...) \
-	plug_log(ddr_plug.logger, stderr, lvl, fmt, ##args)
+	FPLOG_(state->seq, lvl, fmt, ##args)
+
 
 /* fwd decl */
 extern ddr_plugin_t ddr_plug;
@@ -84,10 +86,8 @@ typedef struct _crypt_state {
 	char kset, iset, pset, sset;
 	char finfirst, rev, bench, skiphole;
 	clock_t cpu;
-	int seq;
-	int pad;
-	int inbuf;
-	int pbkdf2r;
+	int seq, pad;
+	int inbuf, pbkdf2r;
 	sec_fields *sec;
 	/*const*/ opt_t *opts;
 	char *pfnm, *sfnm;
@@ -96,18 +96,17 @@ typedef struct _crypt_state {
 	loff_t processed;
 #if 1 //def HAVE_XATTR
 	char* salt_xattr_name;
-	char sxattr, sxfallback;
 	char* key_xattr_name;
-	char kxattr, kxfallback;
 	char* iv_xattr_name;
+	char sxattr, sxfallback;
+	char kxattr, kxfallback;
 	char ixattr, ixfallback;
 #endif
-	char weakrnd;
-	char opbkdf;
-	char outkeyiv;
-	char ctrbug198;
-	char opbkdf11;
-	char nosalthdr;
+	char weakrnd, opbkdf, outkeyiv, ctrbug198;
+	char opbkdf11, nosalthdr, ilnchg, islast;
+	unsigned char *zerobuf;
+	unsigned int zerosize;
+	loff_t hole;
 } crypt_state;
 
 /* aes modules rely on avail of global crypto symbol to point to sec_fields ... */
@@ -131,6 +130,13 @@ const char *crypt_help = "The crypt plugin for dd_rescue de/encrypts data copied
 		"\t:nosalthdr:ctrbug198\n"
 		" Use algorithm=help to get a list of supported crypt algorithms\n";
 
+#ifndef MIN
+# define MIN(a,b) ((a)<(b)? (a): (b))
+#endif
+#ifndef MAX
+# define MAX(a,b) ((a)>(b)? (a): (b))
+#endif
+
 int parse_hex(unsigned char*, const char*, uint maxlen);
 int parse_hex_u32(unsigned int*, const char*, uint maxlen);
 int read_fd(unsigned char*, const char*, uint maxlen, const char*);
@@ -142,7 +148,7 @@ void whiteout(char* str, char quiet);
 int set_flag(char* flg, const char* msg)
 {
 	if (*flg) {
-		FPLOG(FATAL, "%s already set\n", msg);
+		FPLOG_(-1, FATAL, "%s already set\n", msg);
 		return -1;
 	}
 	*flg = 1;
@@ -455,6 +461,7 @@ int crypt_plug_init(void **stat, char* param, int seq, const opt_t *opt)
 	}
 	state->finfirst = state->rev = opt->reverse;
 	/* 7th: iv (later: defaults to generation from salt) */
+
 	return err;
 }
 
@@ -475,6 +482,8 @@ int crypt_plug_release(void **stat)
 	if (state->salt_xattr_name)
 		free(state->salt_xattr_name);
 #endif
+	if (state->zerobuf)
+		free(state->zerobuf);
 	free(*stat);
 	return 0;
 }
@@ -515,7 +524,7 @@ int parse_hex(unsigned char* res, const char* str, uint maxlen)
 	}
 	if (i < maxlen) {
 		memset(res+i, 0, maxlen-i);
-		FPLOG(FATAL, "Too short key/IV (%i/%i) bytes\n", i, maxlen);
+		FPLOG_(-1, FATAL, "Too short key/IV (%i/%i) bytes\n", i, maxlen);
 		return -1;
 	}
 	return 0;
@@ -537,7 +546,7 @@ int parse_hex_u32(unsigned int* res, const char* str, uint maxlen)
 	}
 	if (i < maxlen) {
 		memset(res+i, 0, 4*(maxlen-i));
-		FPLOG(FATAL, "Too short key/IV (%i/%i) u32s\n", i, maxlen);
+		FPLOG_(-1, FATAL, "Too short key/IV (%i/%i) u32s\n", i, maxlen);
 		return -1;
 	}
 	return 0;
@@ -575,7 +584,6 @@ void get_offs_len(const char* str, off_t *off, size_t *len)
 	*len = atol(ptr+1);
 }
 
-#define MIN(a,b) ((a)<(b)? (a): (b))
 int read_fd(unsigned char* res, const char* param, uint maxlen, const char* what)
 {
 	char ibuf[2*maxlen+3];
@@ -587,7 +595,7 @@ int read_fd(unsigned char* res, const char* param, uint maxlen, const char* what
 	int fd = atol(param);
 	int ln = -1;
 	if (fd == 0 && isatty(fd)) {
-		FPLOG(INPUT, "Enter %s: ", what);
+		FPLOG_(-1, INPUT, "Enter %s: ", what);
 		if (hex) {
 			ln = hidden_input(fd, ibuf, 2*maxlen+2, 1);
 			ibuf[ln] = 0;
@@ -605,7 +613,7 @@ int read_fd(unsigned char* res, const char* param, uint maxlen, const char* what
 				if (errno == ESPIPE && off == 0)
 					ln = read(fd, ibuf, MIN(2*maxlen+2, (sz? sz: 4096)));
 				if (ln < 0) {
-					FPLOG(FATAL, "can not read passphrase from fd %i!\n", fd);
+					FPLOG_(-1, FATAL, "can not read secret from fd %i!\n", fd);
 					return 1;
 				}
 			}
@@ -617,7 +625,7 @@ int read_fd(unsigned char* res, const char* param, uint maxlen, const char* what
 				if (errno == ESPIPE && off == 0)
 					ln = read(fd, res, MIN(2*maxlen+2, (sz? sz: 4096)));
 				if (ln < 0) {
-					FPLOG(FATAL, "can not read passphrase from fd %i!\n", fd);
+					FPLOG_(-1, FATAL, "can not read secret from fd %i!\n", fd);
 					return 1;
 				}
 			}
@@ -626,7 +634,7 @@ int read_fd(unsigned char* res, const char* param, uint maxlen, const char* what
 		}
 	}
 	if (ln <= 0)
-		FPLOG(FATAL, "%s empty!\n", what);
+		FPLOG_(-1, FATAL, "%s empty!\n", what);
 	return ln<=0? 1: 0;
 }
 
@@ -636,8 +644,9 @@ int read_file(unsigned char* res, const char* param, uint maxlen)
 	size_t sz = 0;
 	get_offs_len(param, &off, &sz);
 	int fd = open(param, O_RDONLY);
+	/* TODO: Handle a filename of "-" as stdin */
 	if (fd < 0) {
-		FPLOG(FATAL, "Can't open %s for reading: %s\n", 
+		FPLOG_(-1, FATAL, "Can't open %s for reading: %s\n",
 			param, strerror(errno));
 		return -1;
 	}
@@ -655,8 +664,9 @@ int write_file(const unsigned char *data, const char* param, uint maxlen, int mo
 	if (!sz)
 		sz = maxlen;
 	int fd = open(param, O_RDWR|O_CREAT, mode);
+	/* TODO: Handle a filename of "-" as stdout */
 	if (fd < 0) {
-		FPLOG(FATAL, "Can't open %s for writing: %s\n", 
+		FPLOG_(-1, FATAL, "Can't open %s for writing: %s\n",
 			param, strerror(errno));
 		return -1;
 	}
@@ -703,7 +713,7 @@ void whiteout(char* str, char quiet)
 		str[0] = 'X';
 #endif
 	if (!quiet)
-		FPLOG(WARN, "Don't specify sensitive data on the command line!\n", NULL);
+		FPLOG_(-1, WARN, "Don't specify sensitive data on the command line!\n", NULL);
 }
 
 const char* mybasenm(const char* nm)
@@ -922,16 +932,18 @@ static inline int set_iv_xattr(crypt_state *state)
 
 #endif
 
-
 int crypt_open(const opt_t *opt, int ilnchg, int olnchg, int ichg, int ochg,
 	     unsigned int totslack_pre, unsigned int totslack_post,
-	     const fstate_t *fst, void **stat)
+	     const fstate_t *fst, void **stat, int islast)
 {
 	int err = 0;
 	char ivsnm[32], keynm[32], saltnm[32];
 	clock_t t1 = 0;
 	crypt_state *state = (crypt_state*)*stat;
 	//state->opts = (opt_t*)opt;
+	state->zerosize = MAX(65536, opt->softbs);
+	state->ilnchg = ilnchg;
+	state->islast = islast;
 
 	sprintf(ivsnm, "IVS.%s", state->alg->name);
 	sprintf(keynm, "KEYS.%s", state->alg->name);
@@ -955,7 +967,7 @@ int crypt_open(const opt_t *opt, int ilnchg, int olnchg, int ichg, int ochg,
 		t1 = clock();
 	/* Are we en- or decrypting? */
 	const char* encnm = state->enc? opt->oname: opt->iname;
-	size_t encln = state->enc? opt->init_opos + (opt->reverse? 0: fst->estxfer): fst->fin_ipos;
+	size_t encln = state->enc? opt->init_opos + (opt->reverse? 0: fst->estxfer): fst->fin_ipos + (opt->reverse? fst->estxfer: 0);
 	if (state->alg->stream->granul > 1 && state->enc && (state->pad == PAD_ALWAYS || (state->pad == PAD_ASNEEDED && (encln&(BLKSZ-1)))))
 		encln += BLKSZ-(encln&(BLKSZ-1));
 	else
@@ -1271,14 +1283,15 @@ int crypt_open(const opt_t *opt, int ilnchg, int olnchg, int ichg, int ochg,
 	else
 		state->alg->dec_key_setup(state->sec->userkey1, state->sec->dkeys->data, state->alg->rounds);
 	/* Prepare for hole detection */
-	state->lastpos = state->enc? opt->init_opos: opt->init_ipos;
+	state->lastpos = opt->init_ipos;
 	/* Bug compat for 1.98 */
 	if (state->ctrbug198 && state->alg->stream->type == STP_CTR)
 		memset(state->sec->nonce1+BLKSZ-4, 0, 4);
 	/* IV */
+	const loff_t currpos = state->enc? fst->opos: fst->ipos;
 	if (state->alg->stream->iv_prep)
 		state->alg->stream->iv_prep(state->sec->nonce1, state->sec->iv1.data,
-					    state->lastpos/BLKSZ-(state->opbkdf & !state->nosalthdr));
+					    currpos/BLKSZ-(state->opbkdf & !state->nosalthdr));
 	else
 		memcpy(state->sec->iv1.data, state->sec->nonce1, BLKSZ);
 
@@ -1319,6 +1332,9 @@ char memcpy_testzero(void* dst, const void* src, size_t ln)
 	return 1;
 }
 
+
+int crypt_close(loff_t ooff, void **stat);
+
 /* TODO: This routine has become too complex, needs refactoring:
  * Handle special cases explicitly:
  * - Last block decryption forward, reverse
@@ -1333,6 +1349,8 @@ unsigned char* crypt_blk_cb(fstate_t *fst, unsigned char* bf,
 	int skipped = 0;
 	clock_t t1 = 0;
 	ssize_t olen = 0;
+	const loff_t revf = state->rev? -1LL: 1LL;
+	int needivset = state->rev;
 	/* FIXME: Hack -- detect last block on decoding to be able to strip padding.
 	 * Cleaner (but more complex) alternative would be to always buffer the last
 	 * 16 bytes and only flush them on receiving eof flag */ 
@@ -1340,29 +1358,71 @@ unsigned char* crypt_blk_cb(fstate_t *fst, unsigned char* bf,
 	//char lastencrev = (state->enc && state->rev) ? (fst->opos == fst->init_opos? 1: 0): 0;
 	unsigned char* keys = state->enc? state->sec->ekeys->data: state->sec->dkeys->data;
 	Crypt_IV_fn *crypt = state->enc? state->alg->encrypt: state->alg->decrypt;	
+	/* We use currpos to calculate the position for the IV / CTR value
+	 * Use the output position when encrypting, the input when decrypting.
+	 * This implies that no size-changing plugins must be in the chain after (encrypting)
+	 * resp. before (decrypting). */
 	loff_t currpos = state->enc? fst->opos: fst->ipos;
-	if (state->rev)
-		currpos -= *towr;
 	if (state->bench)
 		t1 = clock();
 	if (1 && state->debug)
 		FPLOG(DEBUG, "pos: %li %li vs %li (%i) towr %i\n", (unsigned long)fst->ipos,
 			(unsigned long)fst->opos, (unsigned long)state->lastpos,
 			(unsigned long)state->lastpos/BLKSZ, *towr);
-	if (currpos != state->lastpos) {
-		if (state->alg->stream->seek_blk) {	/* CTR and ECB */
-			if (state->alg->stream->iv_prep)
-				state->alg->stream->iv_prep(state->sec->nonce1, state->sec->iv1.data,
-							    currpos/BLKSZ-state->opbkdf);
-			if (state->debug)
-				FPLOG(INFO, "Adjusted offset %li -> %li (%i)\n", (unsigned long)state->lastpos,
-					(unsigned int)currpos, (unsigned int)currpos/BLKSZ);
-			state->lastpos = currpos;
+	/* Here's a few cases:
+	 * (1) Fwd, no hole: lastpos points to ipos/opos (decr/encr), beginning of block
+	 * (2) Bkw, no hole: lastpos points behind block as do ipos/opos (decr/encr)
+	 * (3) Fwd, hole: ipos/opos point to new filled block, space b/w lastpos and ipos/opos is empty
+	 * (4) Bkw, hole: ipos/opos point behind new filled block; space b/w pos+*towr and lastpos empty
+	 */
+	const loff_t hsz = off_labs(fst->ipos - state->lastpos);
+	if ((/*!lastdec &&*/ !state->ilnchg && hsz > state->inbuf) || state->hole > 0) {
+		if (state->alg->stream->seek_blk && (state->skiphole || !state->enc)) {
+			/* We can only this is we're last in line */
+			int loglevel = (state->skiphole && state->islast)? DEBUG: WARN;
+			FPLOG(loglevel, "Adjusted offset %li -> %li (%i), towr %i\n", (unsigned long)state->lastpos,
+					(unsigned long)fst->ipos, (unsigned int)fst->ipos/BLKSZ, *towr);
+			state->lastpos = fst->ipos;
+			/* Need to adjust opos */
+			fst->opos += hsz * revf;
+			currpos = state->enc? fst->opos: fst->ipos;
+			needivset = 1;
 		} else {
-			FPLOG(FATAL, "Unexpected offset %zi\n", currpos);
-			raise(SIGQUIT);
+			if (fst->ipos != state->lastpos && !state->alg->stream->seek_blk) {
+				FPLOG(FATAL, "Unexpected offset %zi != %zi\n", currpos, state->lastpos);
+				FPLOG(FATAL, "Consider NOT detecting sparse (-a) with incompatible stream mode CBC or passing skiphole\n");
+				crypt_close(fst->opos, stat);
+				crypt_plug_release(stat);
+				exit(13);
+			}
+			/* TODO: Encrypt zeroes */
+			if (!state->zerobuf) {
+				state->zerobuf = malloc(state->zerosize);
+				if (!state->zerobuf) {
+					FPLOG(FATAL, "Failed allocating a zeroed buffer of %i size\n", state->zerosize);
+					raise(SIGQUIT);
+					return bf;
+				}
+			}
+			/* Avoid infinite loops */
+			assert((fst->ipos > state->lastpos && !state->rev) || (fst->ipos < state->lastpos && state->rev));
+			bf = state->zerobuf;
+			*towr = MIN(state->zerosize, hsz);
+			memset(state->zerobuf, 0, *towr);
+			FPLOG(DEBUG, "Fill hole @ %zd/%zd (sz %i) last %zd with %zd zeroes\n",
+				fst->ipos, fst->opos, hsz, state->lastpos, *towr);
+			//needivset = 1;
+			*recall = RECALL_MARK;
+			FPLOG(DEBUG, "Fill hole: opos %zd lastpos %zd (hole left: %i)\n",
+				fst->opos, state->lastpos, state->hole);
 		}
 	}
+	/* Make currpos point to beginning of block */
+	if (state->rev /*&& !state->enc*/)
+		currpos -= *towr;
+	/* Move to end of block */
+	state->lastpos += *towr * (state->rev? -1LL: 1LL);
+
 	if (0 && state->debug)
 		FPLOG(DEBUG, "%Li: %02x %02x %02x %02x ... -> ",
 			currpos, bf[0], bf[1], bf[2], bf[3]);
@@ -1381,14 +1441,16 @@ unsigned char* crypt_blk_cb(fstate_t *fst, unsigned char* bf,
 		assert(!err);
 		assert(olen == BLKSZ);
 		i = BLKSZ-curroff;
+		//state->lastpos -= curroff;
 	} else if ((currpos-state->inbuf)%BLKSZ && !state->enc) {
 		FPLOG(WARN, "Dec alignment error! (%Li-%i)=%Li %i/%i\n", currpos, state->inbuf,
 			currpos - state->inbuf, (unsigned int)((currpos-state->inbuf)%BLKSZ),
 			(unsigned int)((currpos-state->inbuf)&0x0fUL));
 		//raise(SIGQUIT);
 	}
-	if (!state->enc && !state->rev)
-		state->lastpos += *towr;
+	if (needivset && state->alg->stream->iv_prep)
+		state->alg->stream->iv_prep(state->sec->nonce1, state->sec->iv1.data,
+					    currpos/BLKSZ-state->opbkdf);
 	/* Process leftover from last block */
 	if (state->inbuf && *towr >= BLKSZ-state->inbuf) {
 		i = BLKSZ-state->inbuf;
@@ -1408,7 +1470,8 @@ unsigned char* crypt_blk_cb(fstate_t *fst, unsigned char* bf,
 		int left = MIN(512, *towr-i);
 		left -= left%BLKSZ;
 		//memcpy(state->sec->databuf2, bf+i, left);
-		const char zero = (state->skiphole? memcpy_testzero(state->sec->databuf2, bf+i, left): (memcpy(state->sec->databuf2, bf+i, left), 0));
+		const char zero = (state->skiphole? memcpy_testzero(state->sec->databuf2, bf+i, left)
+						  : (memcpy(state->sec->databuf2, bf+i, left), 0));
 		/* Last block on decryption ? */
 		unsigned int unpad = (eof || (lastdec && i+left == *towr))? state->pad: PAD_ZERO;
 		if (state->debug && unpad)
@@ -1426,6 +1489,7 @@ unsigned char* crypt_blk_cb(fstate_t *fst, unsigned char* bf,
 			if (err < 0 || (err > 0 && !unpad)) {
 				FPLOG(FATAL, "crypt returned %i (unpad=%i)!\n", err, unpad);
 				raise(SIGQUIT);
+				return bf;
 			}
 			//assert(!err || (unpad != PAD_ZERO && err >= 0));
 			assert(olen == left || (unpad && olen >= 0));
@@ -1444,8 +1508,12 @@ unsigned char* crypt_blk_cb(fstate_t *fst, unsigned char* bf,
 					state->finfirst = 0;
 				}
 			}
-		} else
+		} else {
+			if (state->debug)
+				FPLOG(DEBUG, "skip zero block %i sz %i @ %zi+%i\n",
+					skipped, zero, fst->ipos, i);
 			++skipped;
+		}
 		i += left;
 	}
 	/* Fix up after skipped holes */
@@ -1456,7 +1524,7 @@ unsigned char* crypt_blk_cb(fstate_t *fst, unsigned char* bf,
 	}
 	/* Copy remainder (incomplete block) into buffer */
 	int left = *towr - i;
-	if (0 && state->debug && eof)
+	if (1 && state->debug && eof)
 		FPLOG(DEBUG, "EOF Block with %i bytes ...\n", *towr);
 	if (1 && state->debug)
 		FPLOG(DEBUG, "left %i finfirst %i eof %i\n", left, state->finfirst, eof);
@@ -1480,6 +1548,7 @@ unsigned char* crypt_blk_cb(fstate_t *fst, unsigned char* bf,
 				FPLOG(NOHDR, " olen %i err %i towr %i\n", olen, err, *towr);
 			if (state->enc && state->rev) {
 				fst->opos += olen-left;
+				//state->lastpos += olen-left;
 				if (state->debug)
 					FPLOG(DEBUG, " LAST %i -> %i\n", left, olen);
 			}
@@ -1488,8 +1557,6 @@ unsigned char* crypt_blk_cb(fstate_t *fst, unsigned char* bf,
 		}
 	}
 	state->inbuf = left;
-	if (state->enc && !state->rev)
-		state->lastpos += *towr;
 	if (0 && state->debug)
 		FPLOG(NOHDR, "%02x %02x %02x %02x ...\n",
 			bf[0], bf[1], bf[2], bf[3]);
@@ -1497,8 +1564,10 @@ unsigned char* crypt_blk_cb(fstate_t *fst, unsigned char* bf,
 	if (state->bench)
 		state->cpu += clock() - t1;
 	state->processed += *towr;
+	if (state->debug)
+		FPLOG(DEBUG, "Processed %i bytes (ctr %i) left %i pad %i at ipos %zi opos %zi next %zi\n",
+			*towr, currpos/BLKSZ, state->inbuf, state->pad, fst->ipos, fst->opos, state->lastpos);
 	return bf;
-
 }
 
 int crypt_close(loff_t ooff, void **stat)
@@ -1528,8 +1597,8 @@ ddr_plugin_t ddr_plug = {
 	.slack_pre = 32,
 	.slack_post = 32,
 	.needs_align = 32,
-	.handles_sparse = 0,
-	.makes_unsparse = 0,
+	.handles_sparse = 1,
+	.makes_unsparse = 1,
 	.changes_output = 1,
 	.changes_output_len = 1,
 	.supports_seek = 0,

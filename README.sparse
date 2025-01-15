@@ -1,0 +1,50 @@
+Architecture of handling sparse files
+=====================================
+
+Without plugins, life was easy. When detecting holes in a file (or failing to
+read some input), we would just jump over the corresponding bytes in the output
+file. Creating a hole there or leaving good content there intact.
+
+With one plugin in the chain, things still work -- we can detect jumps in the
+input position and react in the plugin.
+
+However, if we have a (de)compression plugin ahead of us, things get really
+messy. File positions are not what we expect and ipos movemet is not in a
+straigth-forward relationship to the number of bytes we are fed for processing.
+Detecting holes is no longer possible.
+
+Between 1.99.19 and 1.99.20, the handling of moving ipos and opos was changed
+for holes; removing many of the situations where plugins needed to tweak ipos
+and/or opos. But still not clean...
+
+How to deal with this?
+----------------------
+(Option 1): Only allow for holes in input and on output, but not between
+            plugins. With makes_unsparse=1, it's actually the expected
+            behavior of plugins to never create jumps in opos. Rather
+            output zeroes that can be eliminated just before being written
+            to disk.
+            This is what we're trying to do with 1.99.20, at least for
+            every plugin that might change the length.
+            It's not perfect, in that every plugin still needs it's own
+            non-trivial logic to detect jumps (in case it's first in a
+            chain or behind non-length-changing plugins). It's also not
+            very efficient.
+(Option 2): Change the way our buffer objects that are passed from input
+            to plugin to plugin to output. In particular, the positions
+            are specific to the plugins.
+            INPUT (GLOBAL.ipos) -> (PLUG1.ipos) PLUG1 (PLUG1.opos)
+            -> (PLUG2.ipos) PLUG2 (PLUG2.opos) -> (GLBOAL.opos) OUTPUT.
+            Now each PLUG has it's own tracking of positions and can
+            reliably detect jumps. There may be some more state, such
+            as EOF or errors which may be tracked this way.
+(Option 3): Also generalize the buffer metadata. We may have a block
+            of memory with a start pointer and a length.
+            In addition we may have a hole descriptor (with an offset
+            relative to the buffer and an length).
+            Passing this along would avoid having to detect holes via
+            jumps; we rather have the information explicitly.
+            Each plugin would then need to be prepared to deal with a
+            three-piece logical data: Data, Hole, Data, where each piece
+            could be nonexistent.
+

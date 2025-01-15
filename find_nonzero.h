@@ -45,19 +45,41 @@ inline static size_t find_nonzero(const unsigned char* blk, const size_t ln)
 {
 	if (!ln || *blk)
 		return 0;
+	/* 1st pass: Bytes before 32B aligned block */
 	const unsigned off = (-(unsigned char)(unsigned long)blk) & 0x1f;
-	size_t remain = ln - off;
 	size_t i;
 	for (i = 0; i < off; ++i)
 		if (blk[i])
 			return i;
-	int r2 = remain % 0x1f;
-	size_t res = FIND_NONZERO_OPT(blk+off, remain-r2);
+	/* Rest without 1st pass */
+	const size_t remain = ln - off;
+	/* Calc size of third pass -- this avoids reading beyond the end of blk */
+	const int r2 = remain & 0x1f;
+	/* 2nd pass: Process 32B aligned block */
+	const size_t res = FIND_NONZERO_OPT(blk+off, remain-r2);
+	/* Return if we found non-null in 2nd pass */
 	if (!r2 || res != remain-r2)
 		return off+res;
+	/* 3rd pass: Trailing bytes */
 	for (i = off+remain; i < ln; ++i)
 		if (blk[i])
 			return i;
+	return ln;
+}
+
+#define ZEROCHUNK 512
+/* blk is a pointer just behind the buffer, we count the zero bytes starting from the end */
+inline static size_t find_nonzero_bkw(const unsigned char* blk, const size_t ln)
+{
+	if (!ln || blk[-1])
+		return 0;
+	int off = 0;
+	while (-off < ln) {
+		const int seglen = (ln+off > ZEROCHUNK? ZEROCHUNK: ln+off);
+		if (find_nonzero(blk+off-seglen, seglen) != seglen)
+			return -off;
+		off -= seglen;
+	}
 	return ln;
 }
 

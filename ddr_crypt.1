@@ -334,7 +334,7 @@ and with a trailing CRLF stripped off.
 .br
 The warnings about passing confidential data (here: pass, salt, salthex) on 
 the command line apply -- only do it for testing or in a single-user
-environment.
+environment. Using passfd=0 allows to pass in a password via a pipe.
 .P
 If the file name based automatic salt derivation is used, the assumed file
 length for salt generation can be overridden by
@@ -450,15 +450,16 @@ or reverse direction copies.
 With ECB mode, this will only work, if file size and offsets
 are all block (16byte) aligned. With CBC, none of this is possible.
 .P
-The ddr_crypt plugin has no specific support for encoding holes;
-if however previous correctly encrypted content is present in
-a hole, the support for partial writes in CTR and ECB mode will
-result in a meaningful output. If no previous content is in holes,
-then the result of decrypting zeros will result upon decryption.
+The ddr_crypt plugin has support for encoding holes;
+if holes happen through read errors and skiphole is set, the
+areas will be passed over and nothing gets written at the
+corresponding place in the output file, leaving intact what
+was there before (or zeroes if nothing was there). This only
+works for CTR and ECB modes, not CBC.
 .br
 You can pass the option
 .B skiphole
-to make ddr_crypt leave 512byte blocks of zeros untouched.
+to make sure ddr_crypt leaves 512byte-sized blocks of zeros untouched.
 This will reveal blocks of zeros and may thus disclose valuable
 information to an attacker, so use with care. Also note that you
 need to use this with en- and decryption and with the same 
@@ -469,8 +470,27 @@ in an aligned 512byte block of zeros is smaller than 2^-4096. So
 this option is safe on decrypting -- if some of the ciphertext
 has been overwritten with blocks of zeros, you might even prefer
 to have zeros in the decrypted file rather than random gibberish.)
+If you detect empty blocks (dd_rescue option -a), you may use
+skiphole to make ddr_crypt skip over the holes in sparse files.
+If you don't, the zeroes will be properly encrypted (since 1.99.19),
+resulting in output that can be decrypted also with openssl for
+example.
+So, you have three options to encrypt files with holes:
+.br
+(A) You may use -a and skiphole (in CTR or ECB mode) for both
+encryption and decryption. This results in an encrypted file
+that only dd_rescue with ddr_crypt can decrypt.
+.br
+(B) You do not use any of these options on encryption. For
+decryption, you pass -a though to detect empty blocks before
+they are written to disk and produce holes rather than zeroes.
+.br
+(C) (New with 1.99.19:) You may pass -a on encryption without
+skiphole and still create output with the zeros from the holes
+properly encrypted. They will be decrypted to 0 again and
+with -a will even result in holes in the decrypted file.
 .P
-Note that you can compress and encode holes with ddr_lzo and then
+Note that you can also compress and encode holes with ddr_lzo and then
 pass to ddr_crypt to encrypt and pass through ddr_crypt to decrypt
 and ddr_lzo to uncompress and extract holes again. This only works
 with CTR mode. 
@@ -495,13 +515,13 @@ and better error handling though.
 .
 .SH BUGS/LIMITATIONS
 .SS Maturity
-The plugin is new as of dd_rescue 1.98. Do not yet rely on data
-saved with ddr_crypt as the only backup for valuable data. Also
-expect some changes to ddr_crypt in the not too distant future. 
+The plugin was introduced with dd_rescue 1.98. It has seen quite
+some usage and testing since, but some care may still be warranted
+relying on it as only backup for very valuable data.
 .P
 Due to an issue in ddr_crypt's initialization of the IV for
-CTR mode, the last 32bits would always be zeroed out prior
-to adding the counter. This has been fixed in 1.99.
+CTR mode in dd_rescue 1.98, the last 32bits would always be zeroed
+out prior to adding the counter. This has been fixed in 1.99.
 It order to be compatible with 1.98, the option
 .B ctrbug198
 can be specified on the command line.
@@ -514,12 +534,24 @@ has been applied to ensure it's not vulnerable to malicious data --
 be careful when you process data from untrusted sources.
 .br
 Key handling is a tricky business -- the author may have screwed up
-resulting in some ways to use this program to encrypt data may not
-result in the level of secrecy that is desired.
+in non obvious ways, resulting in some ways to use this program to
+encrypt data may not result in the level of secrecy that is desired.
 .
 .SS Testing
-The crypt plugin does not yet have the same test coverage as the other
-plugins, which means it has not been tested as intensively as the others.
+The crypt plugin has meanwhile seen reasonable test coverage, but
+some more is certainly desirable.
+.
+.SS Plugin chain ordering
+If you chain several plugins (dd_rescue supports this), please ensure
+that no plugin changes the size/offsets after ddr_crypt on encryption
+and none changes the size/offsets before ddr_crypt on decryption.
+If you do, the calculation of the position in the file will be broken
+and a wrong value will be used for the counter value in CTR mode.
+This does not affect ECB, but ECB is not a good choice normally.
+This limitation means that you can compress and encrypt and that you
+can decrypt and decompress. This was a design choice -- as encrypted
+date is incompressible, this other order also does not make any
+sense.
 .
 .SS Future work
 Except for more testing and auditing a few more features are envisioned
@@ -587,7 +619,9 @@ Version 1.99 brought support for ARMv8 crypto acceleration and support
 for openssl style key derivation and Salted__ headers. It also added storing
 pbkdf related infos in xattrs and added support for storing and retrieving
 keys (not recommended!) and IVs in/from xattrs. A bug with CTR initialization
-was resolved (see ctrbug198 option).
+was resolved (see ctrbug198 option). 1.99.19 brought clean handling of holes
+also in reverse file direction (for CTR modes). reverse files could differ
+from forward files before 1.99.19.
 .PP
 Some additional information can be found on
 .br

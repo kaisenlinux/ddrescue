@@ -66,10 +66,12 @@ uint64_t k[] ALIGNED(64) = {
  */
 void sha512_init(hash_t *ctx)
 {
+#ifdef HAVE___BUILTIN_PREFETCH
 	/* Prefetch k */
 	int koff;
 	for (koff = 0; koff < sizeof(k)/sizeof(*k); koff += 64/sizeof(*k))
 		__builtin_prefetch(k+koff, 0, 3);
+#endif
 	//memset((uint8_t*)ctx, 0, sizeof(hash_t));
 	ctx->sha512_h[0] = 0x6a09e667f3bcc908ULL;
 	ctx->sha512_h[1] = 0xbb67ae8584caa73bULL;
@@ -83,10 +85,12 @@ void sha512_init(hash_t *ctx)
 
 void sha384_init(hash_t *ctx)
 {
+#ifdef HAVE___BUILTIN_PREFETCH
 	/* Prefetch k */
 	int koff;
 	for (koff = 0; koff < sizeof(k)/sizeof(*k); koff += 64/sizeof(*k))
 		__builtin_prefetch(k+koff, 0, 3);
+#endif
 	//memset((uint8_t*)ctx, 0, sizeof(hash_t));
 	ctx->sha512_h[0] = 0xcbbb9d5dc1059ed8ULL;
 	ctx->sha512_h[1] = 0x629a292a367cd507ULL;
@@ -285,10 +289,6 @@ static void output(unsigned char* ptr, int ln)
  */
 void sha512_calc(const uint8_t *ptr, size_t chunk_ln, size_t final_len, hash_t *ctx)
 {
-	__builtin_prefetch(ptr, 0, 2);
-	__builtin_prefetch(ptr+64, 0, 2);
-	__builtin_prefetch(ptr+128, 0, 2);
-	__builtin_prefetch(ptr+192, 0, 2);
 	/* ctx and k should be cache-hot already */
 	//__builtin_prefetch(ctx->sha512_h, 0, 3);
 	size_t offset;

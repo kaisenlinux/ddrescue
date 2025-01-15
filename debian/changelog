@@ -1,3 +1,9 @@
+ddrescue (1.99.20-1kaisen) kaisen-packages; urgency=medium
+
+  * Import the 1.99.20 release
+
+ -- Kevin Chevreuil - Kaisen <kaisen@kaisenlinux.org>  Wed, 15 Jan 2025 14:50:44 +0100
+
 ddrescue (1.99.17-1kaisen) kaisen-packages; urgency=medium
 
   * Import the 1.99.17 release

@@ -35,11 +35,15 @@ size_t find_nonzero_sse2o(const unsigned char* blk, const size_t ln)
 		eax = _mm_movemask_epi8(xmm);
 #endif	/* BUGGY **/
 #if defined(SIMD_XOR) || defined(BUGGY_136)
-		if (eax) 
-			return i + myffs(eax)-1;
+		if (eax) {
+			i += myffs(eax)-1;
+			return i>ln? ln: i;
+		}
 #else
-		if (eax != 0xffff)
-			return i + myffs(eax^0xffff)-1;
+		if (eax != 0xffff) {
+			i += myffs(eax^0xffff)-1;
+			return i>ln? ln: i;
+		}
 #endif
 	}
 	return ln;
@@ -71,8 +75,10 @@ size_t find_nonzero_sse2(const unsigned char* blk, const size_t ln)
 		eax = _mm_movemask_epi8(xmm0);
 		ebx = _mm_movemask_epi8(xmm1);
 		eax = ~(eax | (ebx << 16));
-		if (eax) 
-			return i + myffs(eax)-1;
+		if (eax) {
+			i += myffs(eax)-1;
+			return i>ln? ln: i;
+		}
 	}
 	return ln;
 }

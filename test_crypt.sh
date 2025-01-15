@@ -90,6 +90,15 @@ run_ddr -qAx -L ./libddr_crypt.so=enc:weakrnd:alg=AES192-CTR:keysfile:ivsfile dd
 cat dd_rescue dd_rescue > dd_rescue2
 run_ddr -qAp -L ./libddr_crypt.so=dec:weakrnd:alg=AES192-CTR:keysfile:ivsfile dd_rescue.enc dd_rescue.cmp || exit 2
 cmp dd_rescue.cmp dd_rescue2 || exit 3
+# encrypt forward, decrypt backward
+echo "# *** Forward enrypt, Backward decrypt ***"
+run_ddr -qt  -L ./libddr_crypt.so=enc:weakrnd:alg=AES192-CTR:keysfile:ivsfile dd_rescue dd_rescue.enc || exit 1
+run_ddr -qtr -L ./libddr_crypt.so=dec:weakrnd:alg=AES192-CTR:keysfile:ivsfile dd_rescue.enc dd_rescue.cmp || exit 2
+cmp dd_rescue.cmp dd_rescue || exit 3
+echo "# *** Backward enrypt, Forward decrypt ***"
+run_ddr -qtr  -L ./libddr_crypt.so=enc:weakrnd:alg=AES192-CTR:keysfile:ivsfile dd_rescue dd_rescue.enc || exit 1
+run_ddr -qt  -L ./libddr_crypt.so=dec:weakrnd:alg=AES192-CTR:keysfile:ivsfile dd_rescue.enc dd_rescue.cmp || exit 2
+cmp dd_rescue.cmp dd_rescue || exit 3
 rm dd_rescue2
 
 # Holes (all), skiphole
@@ -118,6 +127,7 @@ cmp dd_rescue3.cmp2 dd_rescue3.cmp3 || exit 4
 # Chain with lzo, hash (all)
 if test -n "$HAVE_LZO"; then
 echo "# *** Plugin chains ... ***"
+rm -f CHECHSUMS.*
 SHA256SUM=`type -p sha256sum`
 run_ddr -pqt -L ./libddr_hash.so=sha256:outnm=,./libddr_lzo.so=compr,./libddr_hash.so=sha256:output,./libddr_crypt.so=enc:AES192-CTR:keygen:ivgen:weakrnd:keysfile:ivsfile,./libddr_hash.so=sha256:outnm= dd_rescue3 dd_rescue3.enc || exit 1
 if test -n "$SHA256SUM"; then

@@ -41,6 +41,7 @@ size_t find_nonzero_rep(const unsigned char* blk, const size_t ln)
 #include <sys/time.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <assert.h>
 
 #define SIZE (64*1024*1024)
 
@@ -55,7 +56,7 @@ size_t find_nonzero_rep(const unsigned char* blk, const size_t ln)
 	}				\
 	gettimeofday(&t2, NULL);	\
 	tdiff = t2.tv_sec-t1.tv_sec + 0.000001*(t2.tv_usec-t1.tv_usec);	\
-	printf("%7i x %20s (%8i): %8i (%6.3fs => %5.0fMB/s)\n",	\
+	printf("%7i x %20s (%8i): %8zi (%6.3fs => %5.0fMB/s)\n",	\
 		rep, rnm, sz, ln, tdiff, (double)(rep)*(double)(expect+1)/(1024*1024*tdiff));	\
 	if (ln != expect)		\
 		abort()
@@ -65,7 +66,6 @@ size_t find_nonzero_rep(const unsigned char* blk, const size_t ln)
 	memset(buf, 0, tsz);		\
 	if (sz<tsz) buf[sz]= 1;		\
 	expect = (tsz<sz? tsz: sz);	\
-	gettimeofday(&t1, NULL);	\
 	buf[sz] = 0x4c;			\
 	gettimeofday(&t1, NULL);	\
 	for (i = 0; i < rep; ++i) {	\
@@ -74,7 +74,7 @@ size_t find_nonzero_rep(const unsigned char* blk, const size_t ln)
 	}				\
 	gettimeofday(&t2, NULL);	\
 	tdiff = t2.tv_sec-t1.tv_sec + 0.000001*(t2.tv_usec-t1.tv_usec);	\
-	printf("%7i x %20s (%8i): %8i (%6.3fs => %5.0fMB/s)\n",	\
+	printf("%7i x %20s (%8i): %8zi (%6.3fs => %5.0fMB/s)\n",	\
 		rep, rnm, sz, ln, tdiff, (double)(rep)*(double)(expect+1)/(1024*1024*tdiff));	\
 	if (ln != expect)		\
 		abort()
@@ -121,7 +121,8 @@ int main(int argc, char* argv[])
 	unsigned char* obuf = (unsigned char*)malloc(SIZE+31);
 	unsigned char* buf = (obuf+31)-((unsigned long)(obuf+31)%32);
 	struct timeval t1, t2;
-	int i, expect, ln = 0;
+	int i, expect;
+	size_t ln = 0;
 	double tdiff;
 	int scale = 16;
 	detect_cpu_cap();
@@ -143,8 +144,11 @@ int main(int argc, char* argv[])
 	memset(buf, 0xa5, SIZE);
 
 	ln = find_nonzero_c  (buf, SIZE);
+	assert(ln == 0);
 	ln = find_nonzero    (buf, SIZE);
+	assert(ln == 0);
 	ln = FIND_NONZERO_OPT(buf, SIZE);
+	assert(ln == 0);
 	
 	TESTC    (0, find_nonzero_c,    1024*512*scale/16, SIZE);
 	TEST_SIMD(0, FIND_NONZERO_OPT,  1024*512*scale/16, SIZE);
@@ -162,6 +166,7 @@ int main(int argc, char* argv[])
 	TESTC     (32*1024-9, find_nonzero_c,     1024*32*scale/16, SIZE);
 	TEST_SIMD (32*1024-9, FIND_NONZERO_OPT,   1024*32*scale/16, SIZE);
 	TEST_SIMD2(32*1024-9, find_nonzero_sse2o, 1024*32*scale/16, SIZE);
+	TEST_SIMD2(32*1024-9, find_nonzero_sse2,  1024*32*scale/16, SIZE);
 	TESTC     (32*1024-9, find_nonzero,       1024*32*scale/16, SIZE);
 	TEST_REP  (32*1024-9, find_nonzero_rep,   1024*32*scale/16, SIZE);
 	TESTC    (128*1024-8, find_nonzero_c,    1024*8*scale/16, SIZE);
@@ -174,6 +179,8 @@ int main(int argc, char* argv[])
 	TEST_SIMD(4096*1024-1, FIND_NONZERO_OPT,  256*scale/16, SIZE);
 	TESTC    (16*1024*1024, find_nonzero_c,    64*scale/16, SIZE);
 	TEST_SIMD(16*1024*1024, FIND_NONZERO_OPT,  64*scale/16, SIZE);
+	TEST_SIMD(16*1024*1024+8, FIND_NONZERO_OPT,64*scale/16, SIZE);
+	TEST_SIMD(16*1024*1024, FIND_NONZERO_OPT,  64*scale/16, 16*1024*1024);
 	TESTC    (64*1024*1024, find_nonzero_c,    16*scale/16, SIZE);
 	TEST_SIMD(64*1024*1024, FIND_NONZERO_OPT,  16*scale/16, SIZE);
 	
@@ -190,7 +197,42 @@ int main(int argc, char* argv[])
 	TEST2C     (12*1024*1024, find_nonzero_c,     80*scale/16, SIZE);
 	TEST2_SIMD (12*1024*1024, FIND_NONZERO_OPT,   80*scale/16, SIZE);
 	TEST2_SIMD2(12*1024*1024, find_nonzero_sse2o, 80*scale/16, SIZE);
+	TEST2_SIMD2(12*1024*1024, find_nonzero_sse2,  80*scale/16, SIZE);
 
+	memset(buf, 0xa5, SIZE);
+	memset(buf, 0, 520);
+	ln = find_nonzero(buf, 512);
+	printf("find_nonzero(512): %zi\n", ln);
+	assert(ln == 512);
+	memset(buf, 0, 532);
+	ln = find_nonzero(buf+16, 512);
+	printf("find_nonzero(512): %zi\n", ln);
+	assert(ln == 512);
+
+	memset(buf+SIZE-32, 0, 32);
+	ln = find_nonzero_bkw(buf+SIZE, SIZE);
+	printf("find_nonzero_bkw( -32): %zi\n", ln);
+	assert(ln == 0);
+	memset(buf+SIZE-511, 0, 511);
+	ln = find_nonzero_bkw(buf+SIZE, SIZE);
+	printf("find_nonzero_bkw(-511): %zi\n", ln);
+	assert(ln == 0);
+	memset(buf+SIZE-512, 0, 512);
+	ln = find_nonzero_bkw(buf+SIZE, SIZE);
+	printf("find_nonzero_bkw(-512): %zi\n", ln);
+	assert(ln == 512);
+	memset(buf+SIZE-32768, 0, 32768);
+	ln = find_nonzero_bkw(buf+SIZE, SIZE);
+	printf("find_nonzero_bkw(-32k): %zi\n", ln);
+	assert(ln == 32768);
+	memset(buf, 0, SIZE);
+	ln = find_nonzero_bkw(buf+SIZE, SIZE);
+	printf("find_nonzero_bkw(full): %zi\n", ln);
+	assert(ln == SIZE);
+	memset(buf, 0xa5, SIZE-1024);
+	ln = find_nonzero_bkw(buf+SIZE, 1000);
+	printf("find_nonzero_bkw(-1000): %zi\n", ln);
+	assert(ln == 1000);
 	free(obuf);
 	return 0;
 }

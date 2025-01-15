@@ -31,7 +31,9 @@ uint32_t k[] ALIGNED(64) = { 0x5a827999, 0x6ed9eba1, 0x8f1bbcdc, 0xca62c1d6 };
  */
 void sha1_init(hash_t *ctx)
 {
+#ifdef HAVE____BUILTIN_PREFETCH
 	__builtin_prefetch(k, 0, 3);
+#endif
 	memset((uint8_t*)ctx, 0, sizeof(hash_t));
 	ctx->sha1_h[0] = 0x67452301;
 	ctx->sha1_h[1] = 0xefcdab89;
@@ -187,10 +189,6 @@ static void output(unsigned char* ptr, int ln)
  */
 void sha1_calc(const uint8_t *ptr, size_t chunk_ln, size_t final_len, hash_t *ctx)
 {
-	__builtin_prefetch(ptr, 0, 2);
-	__builtin_prefetch(ptr+64, 0, 2);
-	__builtin_prefetch(ptr+128, 0, 2);
-	__builtin_prefetch(ptr+192, 0, 2);
 	/* ctx and k should be cache-hot already */
 	//__builtin_prefetch(ctx->md5_h, 0, 3);
 	size_t offset;

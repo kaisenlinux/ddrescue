@@ -46,8 +46,10 @@
 // TODO: pass at runtime rather than compile time
 #define HASH_DEBUG(x) if (state->debug) x
 
+#define FPLOG_(seq, lvl, fmt, args...) \
+	plug_log(ddr_plug.logger, seq, stderr, lvl, fmt, ##args)
 #define FPLOG(lvl, fmt, args...) \
-	plug_log(ddr_plug.logger, stderr, lvl, fmt, ##args)
+	FPLOG_(state->seq, lvl, fmt, ##args)
 
 /* fwd decl */
 extern ddr_plugin_t ddr_plug;
@@ -116,7 +118,7 @@ static loff_t readint(const char* const ptr)
 		case ' ':
 		case '\0': break;
 		default:
-			FPLOG(WARN, "suffix %c ignored!\n", *es);
+			FPLOG_(-1, WARN, "suffix %c ignored!\n", *es);
 	}
 	return (loff_t)res;
 }
@@ -148,13 +150,14 @@ int hash_plug_init(void **stat, char* param, int seq, const opt_t *opt)
 	int err = 0;
 	hash_state *state; /* = (hash_state*)malloc(sizeof(hash_state));*/
 	if (posix_memalign(stat, 64, sizeof(hash_state))) {
-		FPLOG(FATAL, "Not enough memory for hash state!\n");
+		FPLOG_(seq, FATAL, "Not enough memory for hash state!\n");
 		return -1;
 	}
 	state = (hash_state*)*stat;
 	memset(state, 0, sizeof(hash_state));
 	state->seq = seq;
 	state->opts = opt;
+	FPLOG(DEBUG, "hash_plug_init %i\n", seq);
 	state->alg = get_hashalg(state, ddr_plug.name);
 	while (param) {
 		char* next = strchr(param, ':');
@@ -340,7 +343,7 @@ int hash_plug_release(void **stat)
 
 int hash_open(const opt_t *opt, int ilnchg, int olnchg, int ichg, int ochg,
 	     unsigned int totslack_pre, unsigned int totslack_post,
-	     const fstate_t *fst, void **stat)
+	     const fstate_t *fst, void **stat, int islast)
 {
 	int err = 0;
 	hash_state *state = (hash_state*)*stat;
@@ -404,6 +407,8 @@ int hash_open(const opt_t *opt, int ilnchg, int olnchg, int ichg, int ochg,
 		FPLOG(WARN, "Size of potential holes may not be correct due to other plugins;\n");
 		FPLOG(WARN, " Hash/HMAC may be miscomputed! Avoid holes (remove -a, use -A).\n");
 	}
+	FPLOG(DEBUG, "%s, %i %i %i %i\n", state->fname,
+			state->ilnchg, state->ichg, state->olnchg, state->ochg);
 	return err;
 }
 
@@ -426,7 +431,7 @@ void hash_last(hash_state *state, loff_t pos)
 {
 	//hash_block(0, 0, ooff, stat);
 	int left = pos - state->hash_pos;
-	assert(state->buflen == left || (state->ilnchg && state->olnchg));
+	assert(state->buflen == left || state->ilnchg);
 	/*
 	fprintf(stderr, "HASH_DEBUG: %s: len=%li, hashpos=%li\n", 
 		state->fname, len, state->hash_pos);
@@ -494,11 +499,11 @@ unsigned char* hash_blk_cb(fstate_t *fst, unsigned char* bf,
 {
 	/* TODO: Replace usage of state->buf by using slack space
 	 * Hmmm, really? Probably buffer management is not sophisticated enough currently ... */
-	/* TODO: If both ilnchg and olnchg are set, switch off sanity checks and go into dumb mode */
+	/* TODO: If ilnchg is set, switch off sanity checks and go into dumb mode */
 	hash_state *state = (hash_state*)*stat;
-	const loff_t pos = state->olnchg? 
-			fst->ipos - state->opts->init_ipos:
-			fst->opos - state->opts->init_opos;
+	const loff_t pos = state->ilnchg?
+		state->hash_pos + state->buflen:
+		fst->ipos - state->opts->init_ipos;
 	HASH_DEBUG(FPLOG(DEBUG, "block(%i/%i): towr=%i, eof=%i, pos=%" LL "i, hash_pos=%" LL "i, buflen=%i\n",
 				state->seq, state->olnchg, *towr, eof, pos, state->hash_pos, state->buflen));
 #ifndef NO_S3_MP
@@ -527,12 +532,14 @@ unsigned char* hash_blk_cb(fstate_t *fst, unsigned char* bf,
 #endif
 	// Handle hole (sparse files)
 	const loff_t holesz = pos - (state->hash_pos + state->buflen);
-	assert(holesz >= 0 || (state->ilnchg && state->olnchg));
+	HASH_DEBUG(FPLOG(DEBUG, "Holesz %zi, pos %zi hpos %zi buflen %zi\n", \
+		holesz, pos, state->hash_pos, state->buflen));
+	assert(holesz >= 0 || state->ilnchg);
 	const unsigned int blksz = state->alg->blksz;
-	if (holesz && !(state->ilnchg && state->olnchg))
+	if (holesz && !state->ilnchg)
 		hash_hole(fst, state, holesz);
 
-	assert(pos == state->hash_pos+state->buflen || (state->ilnchg && state->olnchg));
+	assert(pos == state->hash_pos+state->buflen || state->ilnchg);
 	int consumed = 0;
 	assert(bf);
 	/* First block */
@@ -549,7 +556,7 @@ unsigned char* hash_blk_cb(fstate_t *fst, unsigned char* bf,
 		}
 	}
 
-	assert(state->hash_pos+state->buflen == pos+consumed || (state->ilnchg && state->olnchg));
+	assert(state->hash_pos+state->buflen == pos+consumed || state->ilnchg);
 	/* Bulk buffer process */
 	int to_process = *towr - consumed;
 	assert(to_process >= 0);
@@ -562,11 +569,11 @@ unsigned char* hash_blk_cb(fstate_t *fst, unsigned char* bf,
 			state->alg->hash_calc(bf+consumed, to_process, -1, &state->hmach);
 		consumed += to_process; state->hash_pos += to_process;
 	}
-	assert(state->hash_pos+state->buflen == pos+consumed || (state->ilnchg && state->olnchg));
+	assert(state->hash_pos+state->buflen == pos+consumed || state->ilnchg);
 	to_process = *towr - consumed;
 	assert(to_process >= 0 && to_process < (int)blksz);
 	/* Copy remainder into buffer */
-	if (!(state->olnchg && state->ilnchg) && state->hash_pos + state->buflen != pos + consumed)
+	if (!state->ilnchg && state->hash_pos + state->buflen != pos + consumed)
 		FPLOG(FATAL, "Inconsistency: HASH pos %i, buff %i, st pos %" LL "i, cons %i, tbw %i\n",
 				state->hash_pos, state->buflen, pos, consumed, *towr);
 	if (to_process) {

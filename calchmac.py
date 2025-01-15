@@ -34,6 +34,6 @@ for fnm in sys.argv[3:]:
     with open(fnm, "rb") as f:
         # print fnm
         fcont = f.read()
-        hm = hmac.HMAC(pwd, fcont, algo)
+        hm = hmac.HMAC(bytes(pwd, "utf-8"), fcont, algo)
         # print >>hmf, "%s *%s" % (hm.hexdigest(), fnm)
         print("{} *{}".format(hm.hexdigest(), fnm))

@@ -50,10 +50,12 @@ uint32_t k[] ALIGNED(64) = {
  */
 void sha256_init(hash_t *ctx)
 {
+#ifdef HAVE____BUILTIN_PREFETCH
 	/* Prefetch k */
 	int koff;
 	for (koff = 0; koff < sizeof(k)/sizeof(*k); koff += 64/sizeof(*k))
 		__builtin_prefetch(k+koff, 0, 3);
+#endif
 	memset((uint8_t*)ctx+32, 0, sizeof(hash_t)-32);
 	ctx->sha256_h[0] = 0x6a09e667;
 	ctx->sha256_h[1] = 0xbb67ae85;
@@ -67,10 +69,12 @@ void sha256_init(hash_t *ctx)
 
 void sha224_init(hash_t *ctx)
 {
+#ifdef HAVE____BUILTIN_PREFETCH
 	/* Prefetch k */
 	int koff;
 	for (koff = 0; koff < sizeof(k)/sizeof(*k); koff += 64/sizeof(*k))
 		__builtin_prefetch(k+koff, 0, 3);
+#endif
 	memset((uint8_t*)ctx+32, 0, sizeof(hash_t)-32);
 	ctx->sha256_h[0] = 0xc1059ed8;
 	ctx->sha256_h[1] = 0x367cd507;
@@ -458,10 +462,6 @@ void sha256_calc(const uint8_t *ptr, size_t chunk_ln, size_t final_len, hash_t *
 		fprintf(stderr, "SHA256: %i, ARM8SHA: %i\n", have_sha256, have_arm8sha);
 	 */
 
-	__builtin_prefetch(ptr, 0, 2);
-	__builtin_prefetch(ptr+64, 0, 2);
-	__builtin_prefetch(ptr+128, 0, 2);
-	__builtin_prefetch(ptr+192, 0, 2);
 	/* ctx and k should be cache-hot already */
 	//__builtin_prefetch(ctx->sha256_h, 0, 3);
 	size_t offset;

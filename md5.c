@@ -173,11 +173,13 @@ void md5_64(const uint8_t *ptr, hash_t *ctx)
 
 void md5_init(hash_t *ctx)
 {
+#ifdef HAVE____BUILTIN_PREFETCH
 	/* Prefetch r, k */
 	__builtin_prefetch(r, 0, 3);
 	int koff;
 	for (koff = 0; koff < sizeof(k)/sizeof(*k); koff += 64/sizeof(*k))
 		__builtin_prefetch(k+koff, 0, 3);
+#endif
 	memset((char*)ctx+16, 0, sizeof(hash_t)-16);
 	ctx->md5_h[0] = 0x67452301;
 	ctx->md5_h[1] = 0xefcdab89;
@@ -187,10 +189,6 @@ void md5_init(hash_t *ctx)
 
 void md5_calc(const uint8_t *ptr, size_t chunk_ln, size_t final_len, hash_t *ctx)
 {
-	__builtin_prefetch(ptr, 0, 2);
-	__builtin_prefetch(ptr+64, 0, 2);
-	__builtin_prefetch(ptr+128, 0, 2);
-	__builtin_prefetch(ptr+192, 0, 2);
 	/* ctx and k should be cache-hot already */
 	//__builtin_prefetch(ctx->md5_h, 0, 3);
 	uint32_t offset;

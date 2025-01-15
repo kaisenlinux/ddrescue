@@ -49,7 +49,7 @@
 #endif
 
 // TODO: pass at runtime rather than compile time
-#ifdef DEBUG
+#ifdef LZODEBUG
 # define LZO_DEBUG(x) x
 #else
 # define LZO_DEBUG(x) do {} while (0)
@@ -190,6 +190,7 @@ typedef struct _lzo_state {
 	unsigned int blockno, holeno;
 	unsigned char eof_seen, do_bench, do_opt, do_search;
 	unsigned char debug, nodiscard;
+	unsigned char islast;
 	enum compmode mode;
 	unsigned int last_ulen;
 	comp_alg *algo;
@@ -201,10 +202,14 @@ typedef struct _lzo_state {
 	size_t cmp_ln, unc_ln;
 	/* Bench */
 	clock_t cpu;
+	/* Unsparse */
+	loff_t inhole;
+	unsigned char *buf_zero;
+	int saved_c_off;
 } lzo_state;
 
 #define FPLOG(lvl, fmt, args...) \
-	plug_log(ddr_plug.logger, stderr, lvl, fmt, ##args)
+	plug_log(ddr_plug.logger, state->seq, stderr, lvl, fmt, ##args)
 
 static unsigned int pagesize = 4096;
 
@@ -506,6 +511,8 @@ int lzo_plug_release(void **stat)
 		slackfree(state->dbuf, state);
 	if (state->workspace)
 		free(state->workspace);
+	if (state->buf_zero)
+		free(state->buf_zero);
 	free(*stat);
 	return 0;
 }
@@ -514,7 +521,7 @@ int lzo_plug_release(void **stat)
 #define MAXBLOCKSZ 16UL*1024UL*1024UL
 int lzo_open(const opt_t *opt, int ilnchg, int olnchg, int ichg, int ochg,
 	     unsigned int totslack_pre, unsigned int totslack_post,
-	     const fstate_t *fst, void **stat)
+	     const fstate_t *fst, void **stat, int islast)
 {
 	lzo_state *state = (lzo_state*)*stat;
 	state->opts = opt;
@@ -550,6 +557,7 @@ int lzo_open(const opt_t *opt, int ilnchg, int olnchg, int ichg, int ochg,
 	}
 	state->slackpost = totslack_post;
 	state->slackpre  = totslack_pre ;
+	state->islast = islast;
 	state->dbuf = (unsigned char*)slackalloc(state->dbuflen, state);
 	if (state->do_bench) 
 		state->cpu = 0;
@@ -561,7 +569,7 @@ int lzo_open(const opt_t *opt, int ilnchg, int olnchg, int ichg, int ochg,
 			FPLOG(WARN, "Blocks larger than 256kiB need recompilation of lzop (%ikiB specified)\n",
 				opt->softbs>>10);
 	}
-	state->next_ipos = opt->init_ipos;
+	state->next_ipos = state->mode == COMPRESS? opt->init_ipos: -1;
 	return 0;
 	/* This breaks MD5 in chain before us
 	return consumed;
@@ -687,11 +695,11 @@ unsigned char* lzo_compress(fstate_t *fst, unsigned char *bf,
 	if (fst->ipos > state->next_ipos) {
 		/* Sparse support */
 		const loff_t hsz = fst->ipos - state->next_ipos;
-		if (state->debug)
-			FPLOG(DEBUG, "hole %i@%i/%i (sz %i/%i+%i)\n",
-				state->blockno, state->next_ipos, fst->opos-hsz,
-				hsz, 0, hlen);
 		int holehdrsz = encode_hole(bhdp, addwr, hsz, hlen, state);
+		if (state->debug)
+			FPLOG(DEBUG, "hole %i@%i/%i (sz %i/%i+0)\n",
+				state->blockno, state->next_ipos, fst->opos,
+				hsz, holehdrsz);
 		if (!addwr)
 			wrbf -= holehdrsz;
 		else 
@@ -700,8 +708,6 @@ unsigned char* lzo_compress(fstate_t *fst, unsigned char *bf,
 		addwr += holehdrsz;
 		state->next_ipos = fst->ipos;
 		state->blockno++;
-		/* Compensate for dd_rescue moving opos forward ... */
-		fst->opos -= hsz;
 	}
 	/* NOTE: We always calc checksum of uncompressed data, as we don't get a
 	 * checksum at all otherwise (lzop decompressor does not allow for checksums
@@ -804,16 +810,32 @@ unsigned char* lzo_search_hdr(fstate_t *fst, unsigned char* bf, int *towr,
 				&& fst->buf[off+8] == lzop_hdr[8]) {
 			loff_t hole;
 			int hlen = lzo_parse_hdr(fst->buf+off+sizeof(lzop_hdr), &hole, state);
-			if (!state->opts->quiet)
-				FPLOG(INFO, "lzop header at %i (sz %i/hole %li)\n", fst->ipos+off, 
-					hlen+sizeof(lzop_hdr), hole);
-			fst->opos += hole;
-			off += hlen+sizeof(lzop_hdr);
-			unc_len = *(uint32_t*)(fst->buf+off);
-			cmp_len = *(uint32_t*)(fst->buf+off+4);
-			if (state->debug)
-				FPLOG(DEBUG, "Next blk: %i/%i\n",
-					ntohl(unc_len), ntohl(cmp_len));
+			FPLOG(INFO, "lzop header at %i (sz %i/hole %li)\n", fst->ipos+off, 
+				hlen+sizeof(lzop_hdr), hole);
+			/* FIXME: This optimization, just jumping over the hole,
+			 * is only valid if there is no plugin behind us in the chain.
+			 * Otherwise, we need to send down zeroes, just to have them
+			 * eliminated again down the line in case -a is used (and in case
+			 * they are not transformed to non-zeroes again)a
+			 */
+			if (state->islast) {
+				fst->opos += hole;
+				off += hlen+sizeof(lzop_hdr);
+				unc_len = *(uint32_t*)(fst->buf+off);
+				cmp_len = *(uint32_t*)(fst->buf+off+4);
+				if (state->debug)
+					FPLOG(DEBUG, "Next blk: %i/%i\n",
+						ntohl(unc_len), ntohl(cmp_len));
+			} else {
+				FPLOG(WARN, "not yet implmented: return hole @opos %li\n",
+					fst->opos);
+				fst->opos += hole;
+				off += hlen+sizeof(lzop_hdr);
+				unc_len = *(uint32_t*)(fst->buf+off);
+				cmp_len = *(uint32_t*)(fst->buf+off+4);
+				//*recall = RECALL_MARK;
+				//*towr = hole;
+			}
 		}
 		if (unc_len & mask || cmp_len & mask)
 			continue;
@@ -879,9 +901,8 @@ unsigned char* lzo_search_hdr(fstate_t *fst, unsigned char* bf, int *towr,
 					}
 				}
 			}
-			if (!state->opts->quiet)
-				FPLOG(INFO, "Found block @ %i (flags %08x)\n",
-					fst->ipos+off, state->flags);
+			FPLOG(INFO, "Found block @ %i (flags %08x)\n",
+				fst->ipos+off, state->flags);
 			//*towr -= off;
 			state->hdroff = off;
 			state->do_search = 0;
@@ -892,8 +913,7 @@ unsigned char* lzo_search_hdr(fstate_t *fst, unsigned char* bf, int *towr,
 			const size_t totbufln = state->opts->softbs - ddr_plug.slack_post*((state->opts->softbs+15)/16);
 			const size_t left = totbufln - (*towr-off);
 			if (left < state->opts->softbs) {
-				if (!state->opts->quiet)
-					FPLOG(INFO, "Buffer exhausted Blk Cand @ %i\n", fst->ipos+off);
+				FPLOG(INFO, "Buffer exhausted Blk Cand @ %i\n", fst->ipos+off);
 				off += fst->buf-state->obuf;
 				fst->buf = state->obuf;
 				assert(off >= 0);
@@ -904,6 +924,7 @@ unsigned char* lzo_search_hdr(fstate_t *fst, unsigned char* bf, int *towr,
 					fst->ipos+off, off, fst->buf, state->obuf);
 			if (state->obuf != fst->buf+off)
 				memmove(state->obuf, fst->buf+off, *towr-off);
+			/* Move buffer pointer, compensate with hdroff */
 			fst->buf = state->obuf + *towr-off;
 			state->hdroff = -(*towr-off);
 			*towr = 0;
@@ -955,6 +976,9 @@ int recover_decompr_error(lzo_state *state, fstate_t *fst,
 	if (recoverable && !state->nodiscard) {
 		state->cmp_hdr += bhsz;
 		*c_off += cmp_len+bhsz;
+		// Note: This only works if we're last in line
+		if (!state->islast)
+			FPLOG(WARN, "r_d_e: Skipping while not last in line\n");
 		//Don't d_off += dst_len, as we're skipping; instead:
 		fst->opos += unc_len;
 		state->cmp_ln += cmp_len;
@@ -968,11 +992,33 @@ int recover_decompr_error(lzo_state *state, fstate_t *fst,
 
 #define QUIT { raise(SIGQUIT); ++do_break; break; }
 #define BREAK if (!state->nodiscard) ++do_break; break
-#define DRAIN(x) { do { ++do_break; *recall=1; 		\
-		   LZO_DEBUG(FPLOG(DEBUG, "Drain %i bytes before %s error handling\n", d_off, x));	\
-		   eof = 0;				\
-       		   break; } while(0); 			\
+#define DRAIN(x) { do { ++do_break; *recall = RECALL_MARK;	\
+		   FPLOG(DEBUG, "Drain %i bytes before %s error handling\n", d_off, x);	\
+		   eof = 0;					\
+		   break; } while(0); 				\
 		   if (do_break) break; }
+#define DRAINH(x) { do { ++do_break; 				\
+		   FPLOG(DEBUG, "Drain %i bytes before %s handling\n", d_off, x);	\
+		   eof = 0;					\
+		   break; } while(0); 				\
+		   if (do_break) break; }
+
+
+/* Output zero-filled blocks on holes if we're not the last in line */
+unsigned char* lzo_decompress_hole(fstate_t *fst, int *towr, lzo_state *state)
+{
+	if (!state->buf_zero) {
+		state->buf_zero = malloc(state->opts->softbs);
+		assert(state->buf_zero);
+		memset(state->buf_zero, 0, state->opts->softbs);
+	}
+	const int ln = MIN(state->inhole, state->opts->softbs);
+	FPLOG(DEBUG, "zero out hole (left %i, process %i)\n",
+		state->inhole, ln);
+	state->inhole -= ln;
+	*towr = ln;
+	return state->buf_zero;
+}
 
 /* TODO:
  * - Debug: Output block boundaries
@@ -983,10 +1029,25 @@ unsigned char* lzo_decompress(fstate_t *fst, unsigned char* bf, int *towr,
 			      int eof, int *recall, lzo_state *state)
 {
 	const loff_t ooff = fst->opos;
-	const int inlen = *towr;
+	/* FIXME: How do we avoid processing things twice? When someone
+	 * (not necessarily ourselves, but possibly also ahead of us in the chain)
+	 * has returned RECALL_MARK, we will get the same buffer wuth same ipos
+	 * presented again. We need to detect this.
+	 * We we inserted a zeroed hole ourselves, we will have saved_c_off,
+	 * which seems enough to handle this. How about other cases with
+	 * RECALL_MARK?
+	 */
+	const int inlen = (fst->ipos == state->next_ipos && !state->saved_c_off)? 0: *towr;
+	//const int inlen = *towr;
 	/* Decompression is tricky */
-	int c_off = 0;
+	int c_off = state->saved_c_off;
 	int d_off = 0;
+	if (state->inhole) {
+		*recall = RECALL_MARK;
+		return lzo_decompress_hole(fst, towr, state);
+	} else
+		state->saved_c_off = 0;
+	state->next_ipos = fst->ipos;
 	if (!state->hdr_seen) {
 		assert(ooff - state->opts->init_opos == 0);
 		if (memcmp(bf, lzop_hdr, sizeof(lzop_hdr))) {
@@ -1006,7 +1067,7 @@ unsigned char* lzo_decompress(fstate_t *fst, unsigned char* bf, int *towr,
 				if (lzo_parse_hdr(state->dbuf+sizeof(lzop_hdr), NULL, state) < 0)
 					abort();
 			}
-		} else {	
+		} else {
 			state->cmp_hdr = sizeof(lzop_hdr);
 			c_off += sizeof(lzop_hdr);
 			int err = lzo_parse_hdr(bf+c_off, NULL, state);
@@ -1021,6 +1082,11 @@ unsigned char* lzo_decompress(fstate_t *fst, unsigned char* bf, int *towr,
 	size_t have_len = 0;
 	uint32_t cmp_len = 0, unc_len = 0;
 	int bhsz = sizeof(blockhdr_t);
+	FPLOG(DEBUG, "decompress ipos %" LL "d (next %" LL "i)/opos %" LL "d, inlen %i, hdroff %i\n",
+		fst->ipos, state->next_ipos, fst->opos, inlen, state->hdroff);
+	/* Ensure hdroff is within range */
+	assert(fst->buf + state->hdroff >= state->obuf - 7);
+	/* ??? */
 	if (inlen-state->hdroff <= 0)
 		return bf;
 	/* Main loop: Process blocks */
@@ -1052,8 +1118,9 @@ unsigned char* lzo_decompress(fstate_t *fst, unsigned char* bf, int *towr,
 			LZO_DEBUG(FPLOG(DEBUG, "Next part ...\n"));
 			if (memcmp(effbf+4, lzop_hdr, sizeof(lzop_hdr))) {
 				FPLOG(FATAL, "EOF with MULTIPART, but no new hdr\n");
-				raise(SIGQUIT);
-				break;
+				//DRAIN("EOF");
+				//raise(SIGQUIT);
+				//break;
 			}
 			loff_t hsz;
 			int hln = lzo_parse_hdr(effbf+4+sizeof(lzop_hdr), &hsz, state);
@@ -1120,19 +1187,27 @@ unsigned char* lzo_decompress(fstate_t *fst, unsigned char* bf, int *towr,
 
 		/* Sparse ... */
 		if (0 == cmp_len) {
-			if (d_off) 
-				DRAIN("hole");
+			if (d_off)
+				DRAINH("hole");
 			if (state->debug)
-				FPLOG(DEBUG, "hole %i@%i/%i (sz %i+%i/%i)\n",
+				FPLOG(DEBUG, "hole %i@%i+%i/%i (sz %i+%i/%i)\n",
 					state->blockno, fst->ipos+c_off+state->hdroff,
-					fst->opos+d_off, bhsz, cmp_len, unc_len);
+					inlen, fst->opos+d_off, bhsz, cmp_len, unc_len);
 			state->cmp_hdr += bhsz;
 			c_off += cmp_len+bhsz;
 			//Instead of d_off += unc_len;
-			fst->opos += unc_len;
 			state->cmp_ln += cmp_len;
 			//state->unc_ln += unc_len;
 			state->blockno++;
+			if (!state->islast) {
+				state->inhole = unc_len;
+				*recall = RECALL_MARK;
+				/* Set up state to continue cleanly after the hole */
+				state->saved_c_off = c_off;
+				/* Alternatively, we could have moved fst->buf and hdroff ? */
+				return lzo_decompress_hole(fst, towr, state);
+			} else
+				fst->opos += unc_len;
 			continue;
 		}
 
@@ -1285,7 +1360,9 @@ unsigned char* lzo_decompress(fstate_t *fst, unsigned char* bf, int *towr,
 	/* Need drain? */
 	int spcleft = totbufln-(fst->buf+inlen-state->obuf);
 	//if (!*recall && spcleft < state->opts->softbs)
-	//       *recall = 1;
+	//       *recall = RECALL_MARK;
+	/* FIXME */
+	//int nextrd = *recall != RECALL_NONE? 0: state->opts->softbs;
 	int nextrd = *recall? 0: state->opts->softbs;
 	/* Trivial case: No bytes to store */
 	if (have_len == 0) {
@@ -1300,7 +1377,7 @@ unsigned char* lzo_decompress(fstate_t *fst, unsigned char* bf, int *towr,
 		state->hdroff = -have_len;
 		fst->buf = state->obuf+have_len;
 	/* Enough space for complete block and enough left for next read? */
-	} else if (effbf+bhsz+cmp_len <= state->obuf+totbufln && spcleft >= nextrd) {
+	} else if ((effbf+bhsz+cmp_len <= state->obuf+totbufln && spcleft >= nextrd) || *recall == RECALL_MARK) {
 		/* We have enough space to just append */
 		state->hdroff -= inlen-c_off;
 		fst->buf += inlen;
@@ -1332,10 +1409,13 @@ unsigned char* lzo_decompress(fstate_t *fst, unsigned char* bf, int *towr,
 	}
 
 	*towr = d_off;
+	//if (*recall != RECALL_NONE)
+	//	state->saved_c_off = c_off;
 	return state->dbuf;
 }
 #undef BREAK
 #undef DRAIN
+#undef DRAINH
 
 
 unsigned char* lzo_block(fstate_t *fst, unsigned char* bf, 
@@ -1349,7 +1429,7 @@ unsigned char* lzo_block(fstate_t *fst, unsigned char* bf,
 	if (state->do_bench) 
 		t1 = clock();
 	if (state->mode == COMPRESS) 
-		ptr = lzo_compress(  fst, bf, towr, eof, recall, state);
+		ptr = lzo_compress(fst, bf, towr, eof, recall, state);
 	else {
 		if (state->do_search) 
 			ptr = lzo_search_hdr(fst, bf, towr, eof, recall, state);

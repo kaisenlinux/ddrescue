@@ -467,6 +467,7 @@ static const u32 rcon[] ALIGNED(64) = {
 
 static void rijndaelKeySetupEncPF()
 {
+#ifdef HAVE____BUILTIN_PREFETCH
 	__builtin_prefetch(rcon, 0, 3);
 	//__builtin_prefetch(rcon+16, 0, 3);
 	//__builtin_prefetch(rcon+32, 0, 3);
@@ -474,6 +475,7 @@ static void rijndaelKeySetupEncPF()
 	int j;
 	for (j = 0; j < 256; j += 16)
 		__builtin_prefetch(Te4+j, 0, 3);
+#endif
 }
 
 /**
@@ -559,6 +561,7 @@ int rijndaelKeySetupEnc(u32 rk[/*4*(Nr + 1)*/], const u8 cipherKey[], int keyBit
 static void rijndaelKeySetupDecPF()
 {
 	rijndaelKeySetupEncPF();
+#ifdef HAVE____BUILTIN_PREFETCH
 	int k;
 	for (k = 0; k < 256; k += 16)
 		__builtin_prefetch(Td0+k, 0, 3);
@@ -568,6 +571,7 @@ static void rijndaelKeySetupDecPF()
 		__builtin_prefetch(Td2+k, 0, 3);
 	for (k = 0; k < 256; k += 16)
 		__builtin_prefetch(Td3+k, 0, 3);
+#endif
 }
 
 /**
@@ -622,6 +626,7 @@ static void rijndaelEncryptPF()
 	 * It is NOT a really secure protection against them though.
 	 * Using the HW-accelerated options is always best.
 	 */
+#ifdef HAVE____BUILTIN_PREFETCH
 	int k;
 	for (k = 0; k < 256; k += 16)
 		__builtin_prefetch(Te0+k, 0, 3);
@@ -634,6 +639,7 @@ static void rijndaelEncryptPF()
 
 	for (k = 0; k < 256; k += 16)
 		__builtin_prefetch(Te4+k, 0, 3);
+#endif
 }
 
 void rijndaelEncrypt(const u8 *rkeys /*u32 rk[4*(Nr + 1)]*/, uint Nr, const u8 pt[16], u8 ct[16])
@@ -803,6 +809,7 @@ done:
 
 static void rijndaelDecryptPF()
 {
+#ifdef HAVE____BUILTIN_PREFETCH
 	int k;
 	for (k = 0; k < 256; k += 16)
 		__builtin_prefetch(Td0+k, 0, 3);
@@ -814,6 +821,7 @@ static void rijndaelDecryptPF()
 		__builtin_prefetch(Td3+k, 0, 3);
 	for (k = 0; k < 256; k += 16)
 		__builtin_prefetch(Td4+k, 0, 3);
+#endif
 }
 
 

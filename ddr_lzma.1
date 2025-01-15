@@ -89,7 +89,8 @@ rejected.
 The parameter
 .B preset=X ,
 selects the compression ratio, where X can be an integer from 0 to 9
-inclusively. The default value is 5. The effect
+inclusively. The default value is 3 which is lower than the default of
+6 that xz uses but provides much better bandwidth. The effect
 on compression speed and ratio is significant, see the xz documentation.
 Note that decompression speed is always very good with lzma, even
 without multithreading.
@@ -97,9 +98,10 @@ You can append an e to the preset level to use more CPU (but not more
 memory), trying to compress the data better. This corresponds to the
 --extreme flag in xz. Use levels 0,1,2 if you want compression levels
 better than highest gzip (or low bzip2) with better speed.
-Multithreading further speeds things up, though you need to test it
-on your system, see below. Use the lzo plugin for highest CPU speed
-and lowest memory with very modest compression.
+Multithreading may further speed things up, though you need to test it
+on your system, see below. Use the lzo plugin instead to achieve
+highest compression speeds (lowest CPU usage) and lowest memory
+consumption with very modest compression.
 .
 .SH BUGS/LIMITATIONS
 .SS Maturity
@@ -115,9 +117,19 @@ Note that the checksums in the xz file format do NOT allow to correct
 for errors, because next bytes depends on previous ones. Checksums
 just allow a rather reliable detection of data corruption.
 .P
-Unlike ddr_lzo, no work has been invested to cleanly deal with holes
-(sparse files) or to (partially) recover from corrputed compressed data.
-liblzma may recover in some cases, but don't count on it.
+Unlike ddr_lzo, no work has been invested to recover well from corrupted
+compressed data. liblzma may recover in some cases, but don't count on
+it.
+.P
+When deciding which compressed storage format to use, please read
+https://www.nongnu.org/lzip/xz_inadequate.html. While not all reasons
+given there may be as serious as the author makes them sound, they are
+valid. Right now the lzma plugin is the one choice you have for high
+compression in dd_rescue; consider using tools like par2 to protect
+against corruption for long-time storage. The future may bring lzip,
+zstd or other plugins.
+For many purposes, the proven lzo plugin continues to be a reasonable
+choice.
 .P
 When using multithreading, you may hit bugs. Missing function symbols
 on decoder initialization, memlimit for the decoder always set to 1 byte
@@ -131,7 +143,8 @@ compresses data from
 .IR infile
 into
 .IR outfile
-with compression preset == 9.
+with compression preset == 9 (highest compression, lowest speed
+short of the extreme settings).
 .TP
 .BI dd_rescue\ -L\ lzma=d:mt:memlimit=1234\ infile\ infile2
 will decompress
@@ -141,7 +154,9 @@ to
 in multithreding mode with memory limit equal to 1234 Megabytes.
 .TP
 .BI dd_rescue\ -L\ lzma\ infile.xz\ outfile
-will decompress infile.xz into outfile.
+will decompress infile.xz into outfile. (The fact that the infile
+has an .xz extension makes ddr_lzma assume that it's compressed
+and you want to decompress.)
 .
 .SH SEE ALSO
 .BR dd_rescue (1)
@@ -162,4 +177,4 @@ This plugin is under the same license as dd_rescue: The GNU General
 Public License (GPL) v2 or v3 - at your option.
 .
 .SH HISTORY
-ddr_lzma plugin was first introduced with dd_rescue 1.99 (Nov 2024).
+ddr_lzma plugin was first introduced with dd_rescue 1.99.17 (Nov 2024).

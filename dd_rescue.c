@@ -254,6 +254,7 @@ float printint = 0.1;
 char in_report;
 
 FILE *logfd;
+int ddr_loglevel = 2;
 
 struct timeval starttime, lasttime, currenttime;
 struct timezone tz;
@@ -325,18 +326,18 @@ char *graph;	/* = NULL */
 #define DDR_DEBUG "dd_rescue: (debug): "
 #define DDR_INFO  "dd_rescue: (info): "
 #define DDR_WARN  "dd_rescue: (warning): "
-#define DDR_FATAL "dd_rescue: (fatal): "
 #define DDR_GOOD  "dd_rescue: (success): "
+#define DDR_FATAL "dd_rescue: (fatal): "
 #define DDR_INPUT "dd_rescue: (input): "
 #define DDR_DEBUG_C ULINE DDR_DEBUG NORM
 #define DDR_INFO_C  BOLD DDR_INFO NORM
 #define DDR_WARN_C  AMBER DDR_WARN NORM
-#define DDR_FATAL_C RED DDR_FATAL NORM
 #define DDR_GOOD_C  GREEN DDR_GOOD NORM
+#define DDR_FATAL_C RED DDR_FATAL NORM
 #define DDR_INPUT_C INV DDR_INPUT NORM
 
-const char* ddrlogpre[] = {"", DDR_DEBUG, DDR_INFO, DDR_WARN, DDR_FATAL, DDR_GOOD, DDR_INPUT };
-const char* ddrlogpre_c[] = {"", DDR_DEBUG_C, DDR_INFO_C, DDR_WARN_C, DDR_FATAL_C, DDR_GOOD_C, DDR_INPUT_C };
+const char* ddrlogpre[]   = {"", DDR_DEBUG,   DDR_INFO,   DDR_WARN,   DDR_GOOD,   DDR_FATAL,   DDR_INPUT };
+const char* ddrlogpre_c[] = {"", DDR_DEBUG_C, DDR_INFO_C, DDR_WARN_C, DDR_GOOD_C, DDR_FATAL_C, DDR_INPUT_C };
 
 
 #ifdef MISS_STRSIGNAL
@@ -357,7 +358,7 @@ static inline float difftimetv(const struct timeval* const t2,
 			const struct timeval* const t1)
 {
 	return  (float) (t2->tv_sec  - t1->tv_sec ) +
-		(float) (t2->tv_usec - t1->tv_usec) * 1e-6;
+		(float) (t2->tv_usec - t1->tv_usec) * 5e-7;
 }
 
 
@@ -365,26 +366,28 @@ static inline float difftimetv(const struct timeval* const t2,
 int fplog(FILE* const file, enum ddrlog_t logpre, const char * const fmt, ...)
 {
 	int ret = 0;
-	va_list vl; 
-	va_start(vl, fmt);
-	if (file) {
-		if (logpre) {
-			if ((file == stdout || file == stderr) && !nocol)
-				fprintf(file, "%s", ddrlogpre_c[logpre]);
-			else
-				fprintf(file, "%s", ddrlogpre[logpre]);
-		}
-		ret = vfprintf(file, fmt, vl);
-	}
-	va_end(vl);
-	if (logfd) {
-		if (logpre)
-			fprintf(logfd, "%s", ddrlogpre[logpre]);
+	if (logpre >= ddr_loglevel) {
+		va_list vl; 
 		va_start(vl, fmt);
-		ret = vfprintf(logfd, fmt, vl);
+		if (file) {
+			if (logpre) {
+				if ((file == stdout || file == stderr) && !nocol)
+					fprintf(file, "%s", ddrlogpre_c[logpre]);
+				else
+					fprintf(file, "%s", ddrlogpre[logpre]);
+			}
+			ret = vfprintf(file, fmt, vl);
+		}
 		va_end(vl);
+		if (logfd) {
+			if (logpre)
+				fprintf(logfd, "%s", ddrlogpre[logpre]);
+			va_start(vl, fmt);
+			ret = vfprintf(logfd, fmt, vl);
+			va_end(vl);
+		}
+		scrollup = 0;
 	}
-	scrollup = 0;
 	return ret;
 }
 
@@ -450,20 +453,21 @@ void call_plugins_open(opt_t *op, fstate_t *fst)
 	LISTTYPE(ddr_plugin_t) *plug;
 	LISTFOREACH(ddr_plugins, plug) {
 		if (LISTDATA(plug).open_callback) {
-			int spre  = LISTDATA(plug).slack_pre ;
-			int spost = LISTDATA(plug).slack_post;
+			const int spre  = LISTDATA(plug).slack_pre ;
+			const int spost = LISTDATA(plug).slack_post;
 			slk_pre  += spre  >= 0? spre : -spre *((op->softbs+15)/16);
 			slk_post += spost >= 0? spost: -spost*((op->softbs+15)/16);
+			const int last = plugins_opened+1 == plugins_loaded? 1: 0;
 			/*
-			fplog(stderr, INFO, "Pre %i Post %i TPre %i TPost %i\n",
-				spre, spost, slk_pre, slk_post);
+			fplog(stderr, INFO, "Pre %i Post %i TPre %i TPost %i Last %i\n",
+				spre, spost, slk_pre, slk_post, last);
 			 */
 			int err = LISTDATA(plug).open_callback(op, (plugins_opened > plug_first_lenchg? 1: 0),
 								   (plugins_opened < plug_last_lenchg ? 1: 0),
 								   (plugins_opened > plug_first_chg? 1: 0),
 								   (plugins_opened < plug_last_chg ? 1: 0),
 						plug_max_slack_pre-slk_pre, plug_max_slack_post-slk_post,
-						fst, &LISTDATA(plug).state);
+						fst, &LISTDATA(plug).state, last);
 			if (err < 0) {
 				fplog(stderr, WARN, "Error initializing plugin %s(%i): %s!\n",
 					LISTDATA(plug).name, plugins_opened, strerror(-err));
@@ -517,19 +521,51 @@ unsigned char* call_plugins_block(unsigned char *bf, int *towr, int eof, int *sk
 {
 	if (!plugins_opened)
 		return bf;
-	int recall = -1;
+	int recall = RECALL_NONE;
 	int seq = 0;
 	LISTTYPE(ddr_plugin_t) *plug;
+#if 0
+	// Last plugin
+	ddr_plugin_t *lastplugp = 0;
+	LISTFOREACH(ddr_plugins, plug)
+		lastplugp = &LISTDATA(plug);
+#endif
 	LISTFOREACH(ddr_plugins, plug) {
 		ddr_plugin_t *plugp = &LISTDATA(plug);
 		if (plugp->block_callback && seq >= *skip) {
-			int myrec = 0;
-			bf = plugp->block_callback(fst, bf, towr, recall==-1? eof: 0, &myrec, &plugp->state);
-			if (myrec && recall==-1)
+			int myrec = RECALL_NA;
+			bf = plugp->block_callback(fst, bf, towr, recall==RECALL_NONE? eof: 0, &myrec, &plugp->state);
+			/* Remember which plugin needs a recall first */
+			if (myrec > RECALL_NA && recall == RECALL_NONE)
 				recall = seq;
-			if (op->sparse && plugp->changes_output) {
-				/* TODO: Do sparse detection again */
+#if 0
+			if (op->sparse && plug_unsparse && plugp == lastplugp) {
+				/* TODO: Do sparse detection again (only if op->sparse is set)
+				 * Our strategy could be:
+				 * 	- Only do sparse detection if we're last in line
+				 * 	- ... and someone has set plug_unsparse
+				 * 	- Then: if we find a complete empty block:
+				 * 		- Adjust opos by hole size and set towr to 0
+				 */
+				int off = fst->opos + op->softbs - 1;
+				off = off-off%op->softbs - fst->opos;
+				while (off+op->softbs < *towr) {
+					size_t zln = find_nonzero(bf+off, *towr-off);
+					fplog(stderr, DEBUG, "Hole detection @ %zd/%zd+%d/%zd: %zd/%zd\n",
+						fst->ipos, fst->opos, off, *towr, zln, *towr-off);
+					if (zln == *towr-off) {
+						*towr = off;
+						if (!off)
+							fst->opos += zln;
+						break;
+					}
+					if (zln > op->softbs/2)
+						break;
+					off += op->softbs;
+				}
+
 			}
+#endif
 		}
 		++seq;
 	}
@@ -565,7 +601,7 @@ ddr_plugin_t* insert_plugin(void* hdl, const char* nm, char* param, opt_t *op)
 	}
 
 	plug->logger = (plug_logger_t*)malloc(sizeof(plug_logger_t));
-	snprintf(plug->logger->prefix, 24, "%s(%i): ", plug->name, plugins_loaded);
+	snprintf(plug->logger->prefix, 24, "%s", plug->name);
 	plug->logger->vfplog = vfplog;
 
 	if (plug->init_callback) {
@@ -821,7 +857,7 @@ void updgraph(int err, fstate_t *fst, dpopt_t *dop, opt_t *op)
 }
 
 #if 1
-loff_t file_len(int fd, char *ischr, char* isblk, const char* nm, char quiet, char sparse)
+loff_t file_len(int fd, char *ischr, char* isblk, const char* nm, char sparse)
 {
 	struct STAT64 stbuf;
 	if (*ischr)
@@ -850,7 +886,7 @@ loff_t file_len(int fd, char *ischr, char* isblk, const char* nm, char quiet, ch
 	if (!stbuf.st_size)
 		return 0;
 	diff = stbuf.st_size - stbuf.st_blocks*512;
-	if (!quiet && diff >= 4096 && (float)diff/stbuf.st_size > 0.05)
+	if (diff >= 4096 && (float)diff/stbuf.st_size > 0.05)
 	       fplog(stderr, INFO, "%s is sparse (%i%%) %s\n", nm, (int)(100.0*diff/stbuf.st_size), (sparse? "": ", consider -a"));
 	return stbuf.st_size;
 }
@@ -871,8 +907,8 @@ void input_length(opt_t *op, fstate_t *fst)
 {
 	char iblk = 0;
 	loff_t ilen, olen, ofree = 0;
-	ilen = file_len(fst->ides, &fst->i_chr, &iblk, op->iname, op->quiet, op->sparse);
-	olen = file_len(fst->odes, &fst->o_chr, &fst->o_blk, op->oname, op->quiet, 1);
+	ilen = file_len(fst->ides, &fst->i_chr, &iblk, op->iname, op->sparse);
+	olen = file_len(fst->odes, &fst->o_chr, &fst->o_blk, op->oname, 1);
 	/* If we have a valid len already, things are easy ... */
 	if (ilen) {
 		if (op->reverse) {
@@ -886,9 +922,8 @@ void input_length(opt_t *op, fstate_t *fst)
 		}
 		assert(fst->estxfer > 0);
 		preparegraph(op, fst, ilen);
-		if (!op->quiet)
-			fplog(stderr, INFO, "expect to copy %skiB from %s\n",
-				fmt_kiB(fst->estxfer, !nocol), op->iname);
+		fplog(stderr, INFO, "expect to copy %skiB from %s\n",
+			fmt_kiB(fst->estxfer, !nocol), op->iname);
 		return;
 	}
 	/* Could not determine transfer len from input file, try output file */
@@ -903,8 +938,7 @@ void input_length(opt_t *op, fstate_t *fst)
 			if (olen) {
 				loff_t add = svfs.f_bsize-1 + olen;
 				add -= add%svfs.f_bsize;
-				if (op->verbose)
-					fplog(stderr, INFO, "free space %" LL "i + %" LL "i\n", ofree, add);
+				fplog(stderr, DEBUG, "free space %" LL "i + %" LL "i\n", ofree, add);
 				ofree += add - (op->reverse? 0: op->init_opos);
 			}
 		} else
@@ -925,9 +959,8 @@ void input_length(opt_t *op, fstate_t *fst)
 	assert(fst->estxfer >= 0);
 	if (fst->estxfer) {
 		preparegraph(op, fst, olen);
-		if (!op->quiet)
-			fplog(stderr, INFO, "expect to copy %skiB from %s\n",
-				fmt_kiB(fst->estxfer, !nocol), op->iname);
+		fplog(stderr, INFO, "expect to copy %skiB from %s\n",
+			fmt_kiB(fst->estxfer, !nocol), op->iname);
 	}
 }
 
@@ -961,7 +994,7 @@ int output_length(opt_t *op, fstate_t *fst)
 		if (!fst->fin_opos)
 			return -1;
 		diff = fst->fin_opos - stbuf.st_blocks*512;
-		if (diff >= 4096 && (float)diff/fst->fin_opos > 0.05 && !op->quiet)
+		if (diff >= 4096 && (float)diff/fst->fin_opos > 0.05)
 		       fplog(stderr, INFO, "%s is sparse (%i%%) %s\n", op->oname, (int)(100.0*diff/fst->fin_opos), (op->sparse? "": ", consider -a"));
 	}
 	if (!fst->fin_opos)
@@ -981,9 +1014,8 @@ int output_length(opt_t *op, fstate_t *fst)
 		}			
 		if (!op->maxxfer || op->maxxfer > newmax) {
 			op->maxxfer = newmax;
-			if (!op->quiet)
-				fplog(stderr, INFO, "limit max xfer to %skiB\n",
-					fmt_kiB(op->maxxfer, !nocol));
+			fplog(stderr, INFO, "limit max xfer to %skiB\n",
+				fmt_kiB(op->maxxfer, !nocol));
 		}
 	} else if (op->init_opos > fst->fin_opos) {
 		fplog(stderr, WARN, "change output position %skiB to endpos %skiB due to -M\n",
@@ -1335,8 +1367,7 @@ int copyxattr(const char* inm, const char* onm)
 		}
 		if (setxattr(onm, attrs+offs, extrabuf, itln, 0))
 			fplog(stderr, WARN, "Could not write attr %s: %s\n", attrs+offs, strerror(errno));
-		if (eptrs.opts->verbose)
-			fplog(stderr, INFO, "Copied attr %s (%i bytes)\n", attrs+offs, itln);
+		fplog(stderr, DEBUG, "Copied attr %s (%i bytes)\n", attrs+offs, itln);
 		++copied;
 	}
 	if (ebufall)
@@ -1445,7 +1476,7 @@ static void advancepos(const ssize_t rd, const ssize_t wr, const ssize_t rwr,
 int real_cleanup(opt_t *op, fstate_t *fst, progress_t *prg, 
 		 dpopt_t *dop, dpstate_t *dst, char closelog)
 {
-	int rc, errs = 0;
+	int rc = 0, errs = 0;
 	if (!op->dosplice && !dop->bsim715) {
 		/* EOF notifiction */
 		int fbytes = writeblock(0, &rc, op, fst, prg, dop);
@@ -1645,10 +1676,9 @@ static inline ssize_t mypread(int fd, void* bf, size_t sz, loff_t off,
 		int fault = in_fault_list(read_faults, off/op->hardbs,
 					  (off+(loff_t)sz+(loff_t)(op->hardbs-1))/op->hardbs);
 		if (fault) {
-			if (op->verbose)
-				fplog(stderr, DEBUG, "Inject read fault @ %li (rd %iblk @ %li*%i)\n",
-					(long)((fault-1)*op->hardbs+off), (sz+op->hardbs-1)/op->hardbs,
-					off/op->hardbs, op->hardbs);
+			fplog(stderr, DEBUG, "Inject read fault @ %li (rd %iblk @ %li*%i)\n",
+				(long)((fault-1)*op->hardbs+off), (sz+op->hardbs-1)/op->hardbs,
+				off/op->hardbs, op->hardbs);
 			if (!op->reverse && fst->fin_ipos && fst->ipos == fst->fin_ipos) {
 				/* EOF, we can't proceed any further */
 				errno = 0;
@@ -1683,7 +1713,7 @@ static inline ssize_t mypread(int fd, void* bf, size_t sz, loff_t off,
 		rd = read(fd, bf, sz);
 	else
 		rd = pread64(fd, bf, sz, off);
-	if (rd == -1 && !op->reverse && fst->fin_ipos && fst->ipos == fst->fin_ipos) {
+	if (rd == (ssize_t)-1 && !op->reverse && fst->fin_ipos && fst->ipos == fst->fin_ipos) {
 		errno = 0;
 		return 0;
 	} else
@@ -1699,10 +1729,9 @@ static inline ssize_t mypwrite(int fd, void* bf, size_t sz, loff_t off,
 		int fault = in_fault_list(write_faults, off/op->hardbs,
 					  (off+(loff_t)sz+(loff_t)(op->hardbs-1))/op->hardbs);
 		if (fault) {
-			if (op->verbose)
-				fplog(stderr, DEBUG, "Inject write fault @ %li (wr %iblk @ %li*%i)\n",
-					(long)((fault-1)*op->hardbs+off), (sz+op->hardbs-1)/op->hardbs,
-					off/op->hardbs, op->hardbs);
+			fplog(stderr, DEBUG, "Inject write fault @ %li (wr %iblk @ %li*%i)\n",
+				(long)((fault-1)*op->hardbs+off), (sz+op->hardbs-1)/op->hardbs,
+				off/op->hardbs, op->hardbs);
 			errno = EIO;
 			return -1;
 			// Cloud write and return (fault-1)*op->hardbs bytes ...
@@ -1753,131 +1782,227 @@ ssize_t readblock(const int toread,
  * also writes to secondary output files
  * The plugin chain will be called.
  * return number of written bytes OR negative errno */
+ssize_t real_writeblock(unsigned char* wbuf, int towrite, char *retry,
+			opt_t *op, fstate_t *fst, progress_t *prg, dpopt_t *dop)
+{
+	ssize_t err, totwr = 0;
+	ssize_t wr = 0;
+	int lasterr = 0;
+	assert(fst->opos >= 0);
+	//errno = 0; /* should not be necessary */
+	/* Loop for EINTR/EAGAIN and for incomplete writes that make progress */
+	do {
+		wr += (err = mypwrite(fst->odes, wbuf+wr, towrite-wr,
+				      fst->opos+wr-op->reverse*towrite, op, fst, prg));
+		if (err == -1)
+			wr++;
+	} while ((err == -1 && (errno == EINTR || errno == EAGAIN || !*retry++))
+	      || (err > 0 && errno == 0 && wr < towrite)
+	      || (err == 0 && !*retry++));
+
+	if (wr < towrite && err != 0) {
+		/* HANDLE write errors here ... */
+		lasterr = errno;
+		fplog(stderr, (op->abwrerr? FATAL: WARN),
+				"write %s (%skiB): %s\n",
+				op->oname, fmt_kiB(fst->opos, !nocol), strerror(errno));
+		if (op->abwrerr) {
+			totwr += wr;
+			exit_report(21, op, fst, prg, dop);
+		}
+		fst->nrerr++;
+		if (lasterr != ENXIO && lasterr != EROFS && lasterr != EINVAL && !fst->o_chr && towrite > op->hardbs) {
+			/* TODO: Write retry */
+			fplog(stderr, INFO, "retrying writes with smaller blocks \n");
+			int rc = fsync(fst->odes);
+			if (rc && errno != EINVAL && !fst->o_chr)
+				fplog(stderr, WARN, "sync %s (%sskiB): %s!  \n",
+				      op->oname, fmt_kiB(fst->ipos, !nocol), strerror(errno));
+#ifdef HAVE_SCHED_YIELD
+			sched_yield();
+#endif
+			wr = 0;
+			int off;
+			if (op->reverse) {
+				for (off = towrite-towrite%op->hardbs; off >= 0; off -= op->hardbs) {
+					do {
+						err = mypwrite(fst->odes, wbuf+off, MIN(op->hardbs, towrite-off),
+								fst->opos+off-op->reverse*towrite, op, fst, prg);
+					} while (err == -1 && (errno == EINTR || errno == EAGAIN));
+					if (err >= 0)
+						wr += err;
+					else
+						lasterr = errno;
+				}
+			} else {
+				for (off = 0; off < towrite; off += op->hardbs) {
+					do {
+						err = mypwrite(fst->odes, wbuf+off, MIN(op->hardbs, towrite-off),
+								fst->opos+off-op->reverse*towrite, op, fst, prg);
+					} while (err == -1 && (errno == EINTR || errno == EAGAIN));
+					if (err >= 0)
+						wr += err;
+					else
+						lasterr = errno;
+				}
+			}
+		}
+	}
+	totwr += wr;
+	/* Handle multiple output files, NO error handling, just reporting */
+	char oldochr = fst->o_chr;
+	LISTTYPE(ofile_t) *of;
+	LISTFOREACH(ofiles, of) {
+		ssize_t e2, w2 = 0;
+		ofile_t *oft = &(LISTDATA(of));
+		fst->o_chr = oft->cdev;
+		do {
+			w2 += (e2 = mypwrite(oft->fd, wbuf+w2, towrite-w2, fst->opos+w2-op->reverse*towrite, op, fst, prg));
+			if (e2 == -1)
+				w2++;
+		} while ((e2 == -1 && (errno == EINTR || errno == EAGAIN))
+			  || (w2 < towrite && e2 > 0 && errno == 0));
+		if (w2 < towrite && e2 != 0)
+			fplog(stderr, WARN, "2ndary write %s (%skiB): %s\n",
+			      oft->name, fmt_kiB(fst->opos, !nocol), strerror(errno));
+	}
+	fst->o_chr = oldochr;
+	return lasterr? -lasterr: totwr;
+}
+
+/* write a block from fst->buf to fst->odes at fst->opos
+ * also writes to secondary output files
+ * The plugin chain will be called.
+ * return number of written bytes OR negative errno */
 ssize_t writeblock(int towrite, int* shouldwrite,
 		   opt_t *op, fstate_t *fst, progress_t *prg, dpopt_t *dop)
 {
-	ssize_t err, totwr = 0;
-	int lasterr = 0;
+	ssize_t lasterr = 0;
 	int eof = towrite? 0: 1;
-	int adv_ipos = 0, adv_opos = 0;
-	int prev_tow;
-	int redo = -1;
+	loff_t adv_ipos = 0, adv_opos = 0;
+	const int prev_towr = towrite;
+	int redo;
 	unsigned char* wbuf;
-	*shouldwrite = 0;
+	//*shouldwrite = 0;
+#if 0
+	fplog(stderr, DEBUG, "writeblock entry pos %zd/%zd: %i\n",
+		fst->ipos, fst->opos, towrite);
+#endif
 	do {
 		char retry = fst->o_chr;
-		prev_tow = towrite;
+		towrite = prev_towr;
 		/* Plugins can indicate that they could only process a part of the
-		 * input this time by setting redo != -1.
+		 * input this time by setting redo to REACLL_MARK (not RECALL_NONE).
 		 * If so, we advance ipos by what we fed to the plugins, opos by
 		 * what we actually received back and wrote.
 		 * This will be recorded and UNDONE after we are done and redo is
-		 * back to -1.
+		 * back to RECALL_NONE..
 		 * This is a hack to ensure that plugins have the illusion of the
 		 * right position in ipos/opos.
 		 */
-	       	wbuf = call_plugins_block(fst->buf, &towrite, eof, &redo, op, fst);
-		/* Move ipos already ... */
-		if (redo != -1) {
-			fst->ipos += prev_tow;
-			adv_ipos += prev_tow;
-		}
+		redo = RECALL_NONE;
+		wbuf = call_plugins_block(fst->buf, &towrite, eof, &redo, op, fst);
+		const int orig_towr = towrite;
 		if (!wbuf)
 			assert(!towrite);
 		/* Nothing to write? Next round (or end if redo == -1) */
 		if (!towrite)
 			continue;
 		*shouldwrite += towrite;
-		/* If sparse detection needs to be redone, it's handled in call_plugins_block() */
-		ssize_t wr = 0;
-		//errno = 0; /* should not be necessary */
-		/* Loop for EINTR/EAGAIN and for incomplete writes that make progress */
-		do {
-			wr += (err = mypwrite(fst->odes, wbuf+wr, towrite-wr,
-					      fst->opos+wr-op->reverse*towrite, op, fst, prg));
-			if (err == -1)
-				wr++;
-		} while ((err == -1 && (errno == EINTR || errno == EAGAIN || !retry++))
-		      || (err > 0 && errno == 0 && wr < towrite)
-		      || (err == 0 && !retry++));
-		//fplog(stderr, DEBUG, "wrote %i/%i orig %i\n", wr, towrite, prev_tow);
-		if (wr < towrite && err != 0) {
-			/* HANDLE write errors here ... */
-			lasterr = errno;
-			fplog(stderr, (op->abwrerr? FATAL: WARN),
-					"write %s (%skiB): %s\n",
-		      			op->oname, fmt_kiB(fst->opos, !nocol), strerror(errno));
-			if (op->abwrerr) {
-				totwr += wr;
-				exit_report(21, op, fst, prg, dop);
-			}
-			fst->nrerr++;
-			if (lasterr != ENXIO && lasterr != EROFS && !fst->o_chr && towrite > op->hardbs) {
-				/* TODO: Write retry */
-				fplog(stderr, INFO, "retrying writes with smaller blocks \n");
-				int rc = fsync(fst->odes);
-				if (rc && errno != EINVAL && !fst->o_chr)
-					fplog(stderr, WARN, "sync %s (%sskiB): %s!  \n",
-					      op->oname, fmt_kiB(fst->ipos, !nocol), strerror(errno));
-#ifdef HAVE_SCHED_YIELD
-				sched_yield();
+		/* Sparse detection */
+		/** We can be in a number of situations:
+		 * (A) We are decrypting lots of 0: Output len equals input len then,
+		 *  and plug_unsparse is set; we can look for the beginning of the
+		 *  block (which should be aligned in this scenario) and at the 2nd half
+		 *  of it. If no sparsity is found, we may still have smaller blocks of
+		 *  zeroes that we ignore.
+		 * (B) We are decompressing blocks with lots of zeroes. Decompressed
+		 *  blocks may not be aligned at all and we may have a lot larger output
+		 *  than input. To detect these, we should probably search in softbs
+		 *  intervals.
+		 */
+		int lastdata = 0;
+		const int sparsesz = (prev_towr < op->softbs)? op->hardbs : op->softbs/2;
+		if (op->sparse && plug_unsparse) {
+			int off = 0;
+			//fplog(stderr, DEBUG, "sparsesz %i\n", sparsesz);
+			while (off < towrite) {
+				size_t zln = op->reverse? 
+					find_nonzero_bkw(wbuf+orig_towr-off, towrite-off):
+					find_nonzero(wbuf+off, towrite-off);
+				/* Do not treat holes smaller than hard block size */
+#if 1
+				zln = zln - zln%sparsesz;
+#else
+				zln = zln - zln%op->hardbs;
 #endif
-				wr = 0;
-				loff_t off;
-				if (op->reverse) {
-					for (off = towrite-towrite%op->hardbs; off >= 0; off -= op->hardbs) {
-						do {
-							err = mypwrite(fst->odes, wbuf+off, MIN(op->hardbs, towrite-off),
-									fst->opos+off-op->reverse*towrite, op, fst, prg);
-						} while (err == -1 && (errno == EINTR || errno == EAGAIN));
-						if (err >= 0)
-							wr += err;
-						else
-							lasterr = errno;
+				if (zln >= sparsesz) {
+					/* begin of a sizeable hole: write from last data till here */
+					ssize_t wr = op->reverse?
+						real_writeblock(wbuf+orig_towr-off, off-lastdata, &retry, op, fst, prg, dop):
+						real_writeblock(wbuf+lastdata, off-lastdata, &retry, op, fst, prg, dop);
+					fplog(stderr, DEBUG, "Write hole %lld: data %i+%i (%02x %02x), hole %i+%zi: %i (%i)\n",
+						fst->opos, lastdata, off-lastdata, wbuf[lastdata], wbuf[lastdata+1],
+						off, zln, wr, redo);
+					if (wr < 0)
+						lasterr = wr;
+					else {
+						//*shouldwrite += wr;
+						if (lasterr >= 0)
+							lasterr += wr + zln;
+						fst->opos += (wr + zln) * (op->reverse? -1LL: 1LL);
+						adv_opos  += (wr + zln) * (op->reverse? -1LL: 1LL);
 					}
-				} else {
-					for (off = 0; off < towrite; off += op->hardbs) {
-						do {
-							err = mypwrite(fst->odes, wbuf+off, MIN(op->hardbs, towrite-off),
-									fst->opos+off-op->reverse*towrite, op, fst, prg);
-						} while (err == -1 && (errno == EINTR || errno == EAGAIN));
-						if (err >= 0)
-							wr += err;
-						else
-							lasterr = errno;
-					}
+					off += zln;
+					lastdata = off;
 				}
+				off += sparsesz;
+#if 1
+				assert(!(off%sparsesz));
+#else
+				assert(!(off%op->hardbs));
+#endif
+
+#if 0
+				/* FIXME: Is this correct for reverse? */
+				if ((fst->opos+off) % sparsesz)
+					off += sparsesz - fst->opos % sparsesz;
+				else
+					off += sparsesz;
+#endif
+			}
+			towrite -= lastdata;
+		}
+		if (towrite) {
+			if (lastdata)
+				fplog(stderr, DEBUG, "Write rest @ %lld off %zi len %i (sparsesz: %i)\n",
+					fst->opos, lastdata, towrite, sparsesz);
+			//assert(sparsesz);
+			//assert(!(lastdata%sparsesz));
+			ssize_t wr = (op->reverse && lastdata)?
+				real_writeblock(wbuf+(orig_towr-lastdata-towrite), towrite, &retry, op, fst, prg, dop):
+				real_writeblock(wbuf+lastdata, towrite, &retry, op, fst, prg, dop);
+			towrite = 0;
+			if (wr < 0)
+				lasterr = wr;
+			else {
+				if (lasterr >= 0)
+					lasterr += wr;
+				//*shouldwrite += wr;
+				fst->opos += wr * (op->reverse? -1LL : 1LL);
+				adv_opos  += wr * (op->reverse? -1LL : 1LL);
 			}
 		}
-		totwr += wr;
-		/* Handle multiple output files, NO error handling, just reporting */
-		char oldochr = fst->o_chr;
-		LISTTYPE(ofile_t) *of;
-		LISTFOREACH(ofiles, of) {
-			ssize_t e2, w2 = 0;
-			ofile_t *oft = &(LISTDATA(of));
-			fst->o_chr = oft->cdev;
-			do {
-				w2 += (e2 = mypwrite(oft->fd, wbuf+w2, towrite-w2, fst->opos+w2-op->reverse*towrite, op, fst, prg));
-				if (e2 == -1) 
-					w2++;
-			} while ((e2 == -1 && (errno == EINTR || errno == EAGAIN))
-				  || (w2 < towrite && e2 > 0 && errno == 0));
-			if (w2 < towrite && e2 != 0) 
-				fplog(stderr, WARN, "2ndary write %s (%skiB): %s\n",
-				      oft->name, fmt_kiB(fst->opos, !nocol), strerror(errno));
-		}
-		fst->o_chr = oldochr;
-		if (redo != -1) {
-			fst->opos += wr;
-			adv_opos += wr;
-		}
-		towrite = 0;
-	} while (redo != -1);
+		// FIXME: Do we need to unchange opos? No ...
+	} while (redo != RECALL_NONE);
 	/* Undo opos/ipos changes */
+#if 0
+	fplog(stderr, DEBUG, "writeblock done  pos %zd-%i/%zd-%i: %i (should %i)\n",
+		fst->ipos, adv_ipos, fst->opos, adv_opos, lasterr, *shouldwrite);
+#endif
 	fst->ipos -= adv_ipos;
 	fst->opos -= adv_opos;
-	return (lasterr? -lasterr: totwr);
+	return lasterr;
 }
 
 /* Returns the SIZE of the next block to be copied, at max the passed bs,
@@ -1904,7 +2029,7 @@ int blockxfer(const loff_t max, const int bs,
 		int aligned = op->reverse? off: bs-off;
 		if (!plug_max_req_align || !(aligned % plug_max_req_align) || op->reverse)
 			block = aligned;
-		if (0 && op->verbose)
+		if (0)
 			fplog(stderr, DEBUG, "blockxfer: %i -> %i/%i (@%zi/%zi)\n",
 				bs, block, aligned, fst->ipos, fst->opos);
 	}
@@ -1921,6 +2046,13 @@ void exitfatalerr(const int eno, opt_t *op, fstate_t *fst, progress_t *prg, dpop
 	}
 }
 
+/* We could track whether we last moved or had a real write.
+ * In case of the former, we need a last empty write.
+ * Currently, we do it unconditionally in real_cleanup(),
+ * so no need to track the need.
+ */
+//static char lastskip = 0;
+
 /* Update positions after successful copy,
  * rd, wr => updates for read and write positions
  * 	(should be the same unless some plugin changes the length)
@@ -1935,6 +2067,7 @@ static void advancepos(const ssize_t rd, const ssize_t wr, const ssize_t rwr,
 		(int)fst->ipos, op->reverse? (int)-rd: (int)rd, op->reverse? (int)(fst->ipos-rd): (int)(fst->ipos+rd),
 		(int)fst->opos, op->reverse? (int)-wr: (int)wr, op->reverse? (int)(fst->opos-wr): (int)(fst->opos+wr));
 #endif
+	//lastskip = 1;
 	if (op->reverse) { 
 		fst->ipos -= rd; fst->opos -= wr; 
 	} else { 
@@ -1952,7 +2085,9 @@ static int is_writeerr_fatal(int err, opt_t *op)
 }
 
 /* Do write, returns 0 for success, 1 for error, -1 for fatal error
- * Advances position IF AND ONLY IF return value is NOT negative */
+ * Advances position IF AND ONLY IF return value is NOT negative
+ * fst->opos should point to beginning of block (fwd copy)
+ * resp. byte 0 of next block (rev copy) */
 ssize_t dowrite(const ssize_t rd, opt_t *op, fstate_t *fst, 
 		progress_t *prg, dpopt_t *dop)
 {
@@ -1964,7 +2099,7 @@ ssize_t dowrite(const ssize_t rd, opt_t *op, fstate_t *fst,
 	if (err && is_writeerr_fatal(err, op))
 		++fatal;
 	if (err) {
-		fplog(stderr, WARN, "assumption rd(%i) == wr(%i) failed! \n", rd, wr);
+		fplog(stderr, WARN, "assumption rd(%zi) == wr(%zi) failed! \n", rd, wr);
 		fplog(stderr, (fatal? FATAL: WARN),
 			"write %s (%skiB): %s!\n", 
 			op->oname, fmt_kiB(fst->opos/*+wr*/, !nocol), strerror(err));
@@ -1974,9 +2109,11 @@ ssize_t dowrite(const ssize_t rd, opt_t *op, fstate_t *fst,
 			fplog(stderr, FATAL, "output file will be broken (plugins don't handle sparse)\n");
 		// Advance in case of write errors
 		advancepos(rd, shouldwr, 0, op, fst, prg);
+		//lastskip = 0;
 		return fatal? -1: 1;
 	} else {
 		advancepos(rd, shouldwr, wr, op, fst, prg);
+		//lastskip = 0;
 		if (wr != shouldwr) {
 			fplog(stderr, DEBUG, "Should have written %i, but only %i done\n");
 			return 1;
@@ -1992,8 +2129,24 @@ ssize_t dowrite(const ssize_t rd, opt_t *op, fstate_t *fst,
  * over empty (zeroed) blocks.
  * This is the case for ddr_null (no surprise) and quite some
  * effort has gone into ddr_hash to catch up after a hole.
- * ddr_crypt COULD do it with CTR and skiphole, but this is
- * not implemented.
+ *
+ * NEW Protocol for handling holes:
+ * Assume that plugins that support sparse do
+ * - Detect that the ipos has jumped
+ * - Do NOT rewind opos.
+ *   (If the plugin sets unsparse, opos won't have moved; if it does
+ *    not, it should not care.)
+ * - Return RECALL_MARK in redo until they have processed
+ *   both the hole AND the input delivered to the in fst->buf.
+ * - Assume the input gets repeatedly submitted until RECALL_NONE
+ *   is returned by all in the chain. (If some plugin later in the
+ *   chain sets RECALL_MARK, the plugin may repeatedly see old data
+ *   which it must ignore then, things will break there.)
+ * - If the actions are different at the beginning of a hole,
+ *   they need to keep track of whether or not they are in a hole.
+ *
+ * The design goal here is to avoid plugins having to fiddle with
+ * fst->ipos and fst->opos.
  */
 ssize_t dowrite_sparse(const ssize_t rd, opt_t *op, fstate_t *fst, 
 		       progress_t *prg, repeat_t *rep, dpopt_t *dop)
@@ -2004,23 +2157,30 @@ ssize_t dowrite_sparse(const ssize_t rd, opt_t *op, fstate_t *fst,
 	ssize_t zln = blockiszero(fst->buf, rd, op, rep);
 	/* Also simple: Whole block is empty, so just move on */
 	if (zln >= rd) {
-		advancepos(rd, rd, 0, op, fst, prg);
+		fplog(stderr, DEBUG, "skip complete block @ ipos %zd (opos %zd)\n", fst->ipos, fst->opos);
+		advancepos(rd, plug_unsparse? 0: rd, 0, op, fst, prg);
 		return 0;
 	}
 	/* Block is smaller than 2*opts->hardbs and not completely zero, so don't bother optimizing ... */
 	if (rd < 2*(ssize_t)op->hardbs)
 		return dowrite(rd, op, fst, prg, dop);
 	/* Check both halves -- aligned to opts->hardbs boundaries */
-	int mid = rd/2;
-	mid -= mid%op->hardbs;
+	const ssize_t mid = rd/2 - (rd/2)%op->hardbs;
 	zln -= zln%op->hardbs;
 	/* First half is empty */
 	if (zln >= mid) {
 		unsigned char* oldbuf = fst->buf;
-		advancepos(zln, zln, 0, op, fst, prg);
+		fplog(stderr, DEBUG, "skip ~half block @ ipos %lld (ln %zd)\n", fst->ipos, zln);
+		/* Reverse: Leave at end, Fwd: Skip over empty parts zln */
+		if (!op->reverse)
+			advancepos(zln, plug_unsparse? 0: zln, 0, op, fst, prg);
 		fst->buf += zln;
+		/* Reverse: Moves backward by (rd-zln); Fwd: Moves forward by (rd-zln) */
 		ssize_t wr = dowrite(rd-zln, op, fst, prg, dop);
 		fst->buf = oldbuf;
+		/* Reverse: Need to move backware by zln, Fwd: We're all set already */
+		if (op->reverse)
+			advancepos(zln, plug_unsparse? 0: zln, 0, op, fst, prg);
 		return wr;
 	}
 	/* Check second half */
@@ -2028,8 +2188,14 @@ ssize_t dowrite_sparse(const ssize_t rd, opt_t *op, fstate_t *fst,
 	if (zln2 < rd-mid) // Not empty either, just write ..
 		return dowrite(rd, op, fst, prg, dop);
 	else {
+		fplog(stderr, DEBUG, "skip 2nd ~half block @ ipos %lld+%zi (ln %zd)\n",
+				fst->ipos, mid, zln2);
+		/* Rev: Move end of block */
+		if (op->reverse)
+			advancepos(rd-mid, plug_unsparse? 0: rd-mid, 0, op, fst, prg);
 		ssize_t wr = dowrite(mid, op, fst, prg, dop);
-		advancepos(rd-mid, rd-mid, 0, op, fst, prg);
+		if (!op->reverse)
+			advancepos(rd-mid, plug_unsparse? 0: rd-mid, 0, op, fst, prg);
 		return wr;
 	}
 }
@@ -2066,11 +2232,24 @@ int copyfile_hardbs(const loff_t max, opt_t *op, fstate_t *fst,
 
 		/* EOF */
 		if (rd == 0 && !eno) {
-			if (!op->quiet)
-				fplog(stderr, INFO, "read %s (%skiB): EOF\n", 
-				      op->iname, fmt_kiB(fst->ipos, !nocol));
+			fplog(stderr, INFO, "read %s (%skiB): EOF\n", 
+			      op->iname, fmt_kiB(fst->ipos, !nocol));
+			//if (lastskip)
+			//	errs += dowrite(0, op, fst, prg, dop);
 			return errs;
 		}
+#ifdef HAVE___BUILTIN_PREFETCH
+		if (rd >= 512 && !eno) {
+			__builtin_prefetch(fst->buf,     0, 2);
+			__builtin_prefetch(fst->buf+64,  0, 2);
+			__builtin_prefetch(fst->buf+128, 0, 2);
+			__builtin_prefetch(fst->buf+192, 0, 2);
+			__builtin_prefetch(fst->buf+256, 0, 2);
+			__builtin_prefetch(fst->buf+320, 0, 2);
+			__builtin_prefetch(fst->buf+384, 0, 2);
+			__builtin_prefetch(fst->buf+448, 0, 2);
+		}
+#endif
 		/* READ ERROR */
 		if (rd < toread/* && errno*/) {
 			if (eno) {
@@ -2126,12 +2305,8 @@ int copyfile_hardbs(const loff_t max, opt_t *op, fstate_t *fst,
 			}
 			savebb(pos/op->hardbs, op);
 			updgraph(1, fst, dop, op);
-			prg->fxfer += toread; prg->xfer += toread;
-			if (op->reverse) { 
-				fst->ipos -= toread; fst->opos -= toread; 
-			} else { 
-				fst->ipos += toread; fst->opos += toread; 
-			}
+			prg->fxfer += toread;
+			advancepos(toread, toread, 0, op, fst, prg);
 			/* exit if too many errs */
 			if (op->maxerr && fst->nrerr >= op->maxerr) {
 				fplog(stderr, FATAL, "maxerr reached!\n");
@@ -2191,11 +2366,24 @@ int copyfile_softbs(const loff_t max, opt_t *op, fstate_t *fst,
 
 		/* EOF */
 		if (rd == 0 && !eno) {
-			if (!op->quiet)
-				fplog(stderr, INFO, "read %s (%skiB): EOF\n", 
-				      op->iname, fmt_kiB(fst->ipos, !nocol));
+			fplog(stderr, INFO, "read %s (%skiB): EOF\n", 
+			      op->iname, fmt_kiB(fst->ipos, !nocol));
+			//if (lastskip)
+			//	errs += dowrite(0, op, fst, prg, dop);
 			return errs;
 		}
+#ifdef HAVE___BUILTIN_PREFETCH
+		if (rd >= 512 && !eno) {
+			__builtin_prefetch(fst->buf,     0, 2);
+			__builtin_prefetch(fst->buf+64,  0, 2);
+			__builtin_prefetch(fst->buf+128, 0, 2);
+			__builtin_prefetch(fst->buf+192, 0, 2);
+			__builtin_prefetch(fst->buf+256, 0, 2);
+			__builtin_prefetch(fst->buf+320, 0, 2);
+			__builtin_prefetch(fst->buf+384, 0, 2);
+			__builtin_prefetch(fst->buf+448, 0, 2);
+		}
+#endif
 		/* READ ERROR or short read */
 		if (rd < toread/* && errno*/) {
 			int ret;
@@ -2251,7 +2439,7 @@ int copyfile_softbs(const loff_t max, opt_t *op, fstate_t *fst,
 			if (!err && prg->xfer == old_xfer)
 				return errs;
 			if (op->verbose) {
-				fprintf(stderr, DDR_INFO "ipos %skiB promote to large bs again! \n",
+				fprintf(stderr, DDR_DEBUG "ipos %skiB promote to large bs again! \n",
 					fmt_kiB(fst->ipos, !nocol));
 				scrollup = 0;
 			}
@@ -2293,16 +2481,14 @@ int copyfile_splice(const loff_t max, opt_t *op, fstate_t *fst,
 		ssize_t rd = splice(fst->ides, &fst->ipos, fd_pipe[1], NULL, toread,
 					SPLICE_F_MOVE | SPLICE_F_MORE);
 		if (rd < 0) {
-			if (!op->quiet)
-				fplog(stderr, INFO, "%s (%skiB): fall back to userspace copy\n",
-				      op->iname, fmt_kiB(fst->ipos, !nocol));
+			fplog(stderr, INFO, "%s (%skiB): fall back to userspace copy\n",
+			      op->iname, fmt_kiB(fst->ipos, !nocol));
 			close(fd_pipe[0]); close(fd_pipe[1]);
 			return copyfile_softbs(max, op, fst, prg, rep, dop, dst);
 		}
 		if (rd == 0) {
-			if (!op->quiet)
-				fplog(stderr, INFO, "read %s (%skiB): EOF (splice)\n",
-				      op->iname, fmt_kiB(fst->ipos, !nocol));
+			fplog(stderr, INFO, "read %s (%skiB): EOF (splice)\n",
+			      op->iname, fmt_kiB(fst->ipos, !nocol));
 			break;
 		}
 		while (rd) {
@@ -2467,8 +2653,7 @@ void init_random(opt_t *op, dpopt_t *dop, dpstate_t *dst)
 		unsigned char sbf[256];
 		if (!strcmp(dop->prng_sfile, "-")) {
 			fd = 0;
-			if (op->verbose)
-				fplog(stderr, INFO, "reading random seed from <stdin> ...\n");
+			fplog(stderr, INFO, "reading random seed from <stdin> ...\n");
 		} else
 			fd = open(dop->prng_sfile, O_RDONLY);
 		if (fd == -1) {
@@ -2557,6 +2742,7 @@ void printversion()
 #ifdef HAVE_GETOPT_LONG
 struct option longopts[] = { 	{"help", 0, NULL, 'h'}, {"verbose", 0, NULL, 'v'},
 				{"quiet", 0, NULL, 'q'}, {"version", 0, NULL, 'V'},
+				{"loglevel", 1, NULL, 'E'},
 				{"color", 1, NULL, 'c'}, {"ratecontrol", 1, NULL, 'C'},
 				{"ipos", 1, NULL, 's'}, {"opos", 1, NULL, 'S'},
 				{"softbs", 1, NULL, 'b'}, {"hardbs", 1, NULL, 'B'},
@@ -2635,6 +2821,7 @@ void printlonghelp()
 	fprintf(stderr, "         -F off[-off]r/rep[,off[-off]w/rep[,...]]  fault injection (hardbs off) r/w\n");
 	fprintf(stderr, "         -q         quiet operation,\n");
 	fprintf(stderr, "         -v         verbose operation,\n");
+	fprintf(stderr, "         -E loglv   set plugin loglevel (0 = verbose, 2 = default, 5 = quiet, max 6),\n");
 	fprintf(stderr, "         -c 0/1     switch off/on colors (def=auto),\n");
 	fprintf(stderr, "         -V         display version and exit,\n");
 	fprintf(stderr, "         -h         display this help and exit.\n");
@@ -2664,23 +2851,23 @@ void shortusage()
 
 void printinfo(FILE* const file, opt_t *op)
 {
-	fplog(file, INFO, "about to transfer %s kiBytes from %s to %s\n",
+	fplog(file, DEBUG, "transfer max %s kiBytes from %s to %s\n",
 	      (op->maxxfer? fmt_kiB(op->maxxfer, !op->nocol): "unlim"), op->iname, op->oname);
-	fplog(file, INFO, "blocksizes: soft %i, hard %i\n", op->softbs, op->hardbs);
-	fplog(file, INFO, "starting positions: in %skiB, out %skiB\n",
+	fplog(file, DEBUG, "blocksizes: soft %i, hard %i\n", op->softbs, op->hardbs);
+	fplog(file, DEBUG, "starting positions: in %skiB, out %skiB\n",
 	      fmt_kiB(op->init_ipos, !nocol), fmt_kiB(op->init_opos, !nocol));
-	fplog(file, INFO, "Logfile: %s, Maxerr: %li\n",
+	fplog(file, DEBUG, "Logfile: %s, Maxerr: %li\n",
 	      (op->lname? op->lname: "(none)"), op->maxerr);
-	fplog(file, INFO, "Reverse: %s, Trunc: %s, interactive: %s\n",
+	fplog(file, DEBUG, "Reverse: %s, Trunc: %s, interactive: %s\n",
 	      YESNO(op->reverse), (op->dotrunc? "yes": (op->trunclast? "last": "no")), YESNO(op->interact));
-	fplog(file, INFO, "abort on Write errs: %s, spArse write: %s\n",
+	fplog(file, DEBUG, "abort on Write errs: %s, spArse write: %s\n",
 	      YESNO(op->abwrerr), (op->sparse? "yes": (op->nosparse? "never": "if err")));
-	fplog(file, INFO, "preserve: %s, splice: %s, avoidWrite: %s\n",
+	fplog(file, DEBUG, "preserve: %s, splice: %s, avoidWrite: %s\n",
 	      YESNO(op->preserve), YESNO(op->dosplice), YESNO(op->avoidwrite));
-	fplog(file, INFO, "fallocate: %s, Repeat: %s, O_DIRECT: %s/%s\n",
+	fplog(file, DEBUG, "fallocate: %s, Repeat: %s, O_DIRECT: %s/%s\n",
 	      YESNO(op->falloc), YESNO(op->i_repeat), YESNO(op->o_dir_in), YESNO(op->o_dir_out));
 	/*
-	fplog(file, INFO, "verbose: %s, quiet: %s\n", 
+	fplog(file, DEBUG, "verbose: %s, quiet: %s\n", 
 	      YESNO(op->verbose), YESNO(op->quiet));
 	*/
 }
@@ -2845,13 +3032,11 @@ void populate_faultlists(const char* arg, opt_t *op)
 			arg = ptr+1;
 		else
 			arg = arg+strlen(arg);
-		if (op->verbose)
-			fplog(stderr, DEBUG, "Inject %c fault (%ix) for range %" LL "u-%" LL "u\n",
-				rw, fault.rep, fault.off, fault.off2);
+		fplog(stderr, DEBUG, "Inject %c fault (%ix) for range %" LL "u-%" LL "u\n",
+			rw, fault.rep, fault.off, fault.off2);
 	}
-	if (op->verbose)
-		fplog(stderr, DEBUG, "Will inject %i/%i faults for read/write\n",
-			LISTSIZE(read_faults, fault_in_t), LISTSIZE(write_faults, fault_in_t));
+	fplog(stderr, DEBUG, "Will inject %i/%i faults for read/write\n",
+		LISTSIZE(read_faults, fault_in_t), LISTSIZE(write_faults, fault_in_t));
 }
 
 
@@ -2884,9 +3069,9 @@ char* parse_opts(int argc, char* argv[], opt_t *op, dpopt_t *dop)
 	int tmpfd = 0;
 
 #ifdef LACK_GETOPT_LONG
-	while ((c = getopt(argc, argv, ":rtTfihqvVwWaAdDkMRpPuc:b:B:m:e:s:S:l:L:o:y:z:Z:2:3:4:xY:F:C:")) != -1)
+	while ((c = getopt(argc, argv, ":rtTfihqvVwWaAdDkMRpPuc:b:B:m:e:s:S:l:L:o:y:z:Z:2:3:4:xY:F:C:E:")) != -1)
 #else
-	while ((c = getopt_long(argc, argv, ":rtTfihqvVwWaAdDkMRpPuc:b:B:m:e:s:S:l:L:o:y:z:Z:2:3:4:xY:F:C:", longopts, NULL)) != -1)
+	while ((c = getopt_long(argc, argv, ":rtTfihqvVwWaAdDkMRpPuc:b:B:m:e:s:S:l:L:o:y:z:Z:2:3:4:xY:F:C:E:", longopts, NULL)) != -1)
 #endif
 	{
 		switch (c) {
@@ -2911,8 +3096,10 @@ char* parse_opts(int argc, char* argv[], opt_t *op, dpopt_t *dop)
 			case 'W': op->avoidwrite = 1; break;
 			case 'h': printlonghelp(); cleanup(1); exit(0); break;
 			case 'V': printversion(); cleanup(1); exit(0); break;
-			case 'v': op->quiet = 0; op->verbose = 1; break;
-			case 'q': op->verbose = 0; op->quiet = 1; break;
+			case 'v': op->quiet = 0; op->verbose = 1; ddr_loglevel = 0; break;
+			case 'q': op->verbose = 0; op->quiet = 1;
+				  if (ddr_loglevel >= 3) ddr_loglevel = 5; else ddr_loglevel = 3; break;
+			case 'E': ddr_loglevel = readint(optarg, 0); break;
 			case 'c': op->nocol = !readbool(optarg); nocol = op->nocol; break;
 			case 'C': op->maxkbs = (unsigned int)(readint(optarg, 0)/1024); break;
 			case 'b': op->softbs = (int)readint(optarg, 0); break;
@@ -2979,9 +3166,8 @@ char* parse_opts(int argc, char* argv[], opt_t *op, dpopt_t *dop)
 			op->hardbs = BUF_HARDBLOCKSIZE;
 	}
 
-	if (!op->quiet)
-		fplog(stderr, INFO, "Using softbs=%skiB, hardbs=%skiB\n", 
-			fmt_kiB(op->softbs, !nocol), fmt_kiB(op->hardbs, !nocol));
+	fplog(stderr, INFO, "Using softbs=%skiB, hardbs=%skiB\n", 
+	      fmt_kiB(op->softbs, !nocol), fmt_kiB(op->hardbs, !nocol));
 
 	/* sanity checks */
 #ifdef O_DIRECT
@@ -3148,7 +3334,7 @@ void sanitize_and_prepare(opt_t *op, dpopt_t *dop, fstate_t *fst, dpstate_t *dst
 	if (!op->extend)
 		sparse_output_warn(op, fst);
 	if (fst->o_chr) {
-		if (!op->nosparse && !op->quiet)
+		if (!op->nosparse)
 			fplog(stderr, WARN, "Not using sparse writes for non-seekable output\n");
 		op->nosparse = 1; op->sparse = 0; op->dosplice = 0;
 		if (op->avoidwrite) {
@@ -3224,8 +3410,7 @@ void sanitize_and_prepare(opt_t *op, dpopt_t *dop, fstate_t *fst, dpstate_t *dst
 	}
 		
 	if (op->dosplice) {
-		if (!op->quiet)
-			fplog(stderr, INFO, "splice copy, ignoring -a, -r, -y, -R, -W\n");
+		fplog(stderr, INFO, "splice copy, ignoring -a, -r, -y, -R, -W\n");
 		op->reverse = 0;
 	}
 
@@ -3453,7 +3638,7 @@ int main(int argc, char* argv[])
 	err += cleanup(0);
 	if (int_by == SIGQUIT)
 		++err;
-	if (err && !opts->quiet)
+	if (err)
 		fplog(stderr, WARN, "There were %i errors! \n", err);
 	if (logfd)
 		fclose(logfd);
