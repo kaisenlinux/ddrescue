@@ -49,7 +49,7 @@ mktestfile()
 ./dd_rescue -q -S 5140k -m 278k /dev/zero ${TESTFILE}
 ./dd_rescue -q -S 7140k -m 278k /dev/zero ${TESTFILE}
 "
-	if test -n "$EH"; then echo ./dd_rescue -S 0 -m 64k /dev/zero ${TESTFILE}; fi
+	if test -n "$EH"; then echo ./dd_rescue -qS 0 -m 64k /dev/zero ${TESTFILE}; fi
 	# Create sparse file
 	./dd_rescue -qt -Z 0 -m $SZ ${TESTFILE}
 	./dd_rescue -q -S 32k -m 16k /dev/zero ${TESTFILE}
@@ -60,7 +60,7 @@ mktestfile()
 	./dd_rescue -q -S 3M -m 1M /dev/zero ${TESTFILE}
 	./dd_rescue -q -S 5140k -m 278k /dev/zero ${TESTFILE}
 	./dd_rescue -q -S 7140k -m 278k /dev/zero ${TESTFILE}
-	if test -n "$EH"; then ./dd_rescue -S 0 -m 64k /dev/zero ${TESTFILE}; fi
+	if test -n "$EH"; then ./dd_rescue -qS 0 -m 64k /dev/zero ${TESTFILE}; fi
 }
 
 mktestfile

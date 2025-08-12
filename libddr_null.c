@@ -21,10 +21,9 @@ typedef struct _null_state {
 	char rev;
 	loff_t next_ipos;
 	unsigned char *nullbuf;
+	int slackpre;
 } null_state;
 
-#define FPLOG(lvl, fmt, args...) \
-	plug_log(ddr_plug.logger, state->seq, stderr, lvl, fmt, ##args)
 
 const char* null_help = "The null plugin does nothing ...\n"
 			"Options: debug:[no]lnchange:[no]change:unsparse:nosparse:noseek.\n"
@@ -94,11 +93,12 @@ int null_plug_release(void **stat)
 		return -1;
 	null_state *state = (null_state*)*stat;
 	if (state->nullbuf)
-		free(state->nullbuf);
+		slack_free(state->nullbuf, state->slackpre);
 	free(*stat);
 	return 0;
 }
 
+#define NULLSZ 65536
 int null_open(const opt_t *opt, int ilnchg, int olnchg, int ichg, int ochg,
 	      unsigned int totslack_pre, unsigned int totslack_post,
 	      const fstate_t *fst, void **stat, int islast)
@@ -107,6 +107,9 @@ int null_open(const opt_t *opt, int ilnchg, int olnchg, int ichg, int ochg,
 	state->next_ipos = opt->init_ipos;
 	if (opt->reverse)
 		state->rev = 1;
+	state->slackpre = totslack_pre;
+	state->nullbuf = slack_alloc(NULLSZ, totslack_pre, totslack_post, CLEAR_ALL,
+				     &ddr_plug, state->seq);
 	return 0;
 }
 
@@ -117,8 +120,6 @@ int null_open(const opt_t *opt, int ilnchg, int olnchg, int ichg, int ochg,
 #else
 #error __WORDSIZE unknown
 #endif
-
-#define NULLSZ 65536
 
 #define MIN(a,b) (a<b? a: b)
 
@@ -145,11 +146,6 @@ unsigned char* null_blk_cb(fstate_t *fst, unsigned char* bf,
 			fst->next_ipos += hsz;
 #else
 			/* Now we would need to feed back null blocks ... */
-			if (!state->nullbuf) {
-				state->nullbuf = malloc(NULLSZ);
-				assert(state->nullbuf);
-				memset(state->nullbuf, 0, NULLSZ);
-			}
 			*towr = MIN(NULLSZ, hsz);
 			/* We expect to be called repeatedly with same ipos,
 			 * while we're catching up with next_ipos

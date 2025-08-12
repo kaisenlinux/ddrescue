@@ -277,7 +277,9 @@ different from the input file at the location where blocks of zeroes
 were skipped over.
 .B dd_rescue
 tries to detect this and issues a warning, but it does not prevent this
-from happening
+from happening.
+When dealing with sparse files, succxfer will report the data really
+written, not the pieces that have been skipped on writing.
 .TP 8
 .BR \-W ", " \-\-avoidwrite
 results in 
@@ -394,7 +396,10 @@ has been compiled with libxattr support and the library can be dynamically
 loaded on the system. Also note that failing to copy the attributes with
 .IR -p
 is not considered a failure and thus won't negatively affect the exit code
-of dd_rescue.
+of dd_rescue. This can be changed with a second
+.IR -p
+, resulting in an early exit (code 26) for ownership and permission failures
+and a non-0 exit code on times and xattr copy failures.
 .TP 8
 .BR \-t ", " \-\-truncate
 tells
@@ -882,7 +887,18 @@ Block offsets are always counted in absolute positions, so starting in
 the middle of a file with -s or reverse copying won't affect the absolute
 position that is hit with the fault injection. (This has changed since
 1.98.)
-
+.br
+The option
+.B -H percent
+on the command line will cause read and write havoc by returning short
+reads and writes and by returning an indication that a read or write
+has to be redone as the system call was interrupted or would block.
+The percentage given will be evenly split between interrupted calls
+and short reads/writes. According to the GNU libc documentation, such
+things can happen; the fact they only do happen seldomly and only under
+certain circumstances makes it hard to test, thus this option to force
+it to randomly happen. (This has led to bug fixes in 1.99.21.)
+.br
 .SH BUGS/LIMITATIONS
 The source code does use the 64bit functions provided by glibc for file
 positioning. However, your kernel might not support it, so you might be

@@ -44,6 +44,7 @@ typedef struct _lzma_state {
 	uint64_t max_memlimit;
 	unsigned char *output;
 	size_t buf_len;
+	int slackpre, slackpost;
 	lzma_stream strm;
 	uint32_t mt;
 	bool do_bench;
@@ -56,10 +57,6 @@ typedef struct _lzma_state {
 	size_t read, write;
 } lzma_state;
 
-#define FPLOG_(seq, lvl, fmt, args...) \
-	plug_log(ddr_plug.logger, seq, stderr, lvl, fmt, ##args)
-#define FPLOG(lvl, fmt, args...) \
-	FPLOG_(state->seq, lvl, fmt, ##args)
 
 const char* lzma_help = "LZMA plugin which is doing compression/decompression for xz archives.\n"
 			" Parameters:\n"
@@ -232,9 +229,9 @@ int lzma_plug_release(void **stat)
 
 	lzma_state *state = (lzma_state *)*stat;
 	if (state->zero_buf)
-		free(state->zero_buf);
+		slack_free(state->zero_buf, state->slackpre);
 	if (state->output)
-		free(state->output);
+		slack_free(state->output, state->slackpre);
 
 	free(*stat);
 	return 0;
@@ -272,6 +269,9 @@ int lzma_open(const opt_t *opt, int ilnchg, int olnchg, int ichg, int ochg,
 		return -1;
 	}
 
+	state->slackpre = totslack_pre;
+	state->slackpost = totslack_post;
+
 	lzma_memlimit_set(&(state->strm),
 		state->memlimit ? state->memlimit : state->max_memlimit / 8);
 	state->buf_len = 2 * opt->softbs + 16384;
@@ -284,13 +284,8 @@ int lzma_open(const opt_t *opt, int ilnchg, int olnchg, int ichg, int ochg,
 unsigned char* lzma_algo(unsigned char *bf, lzma_state *state, int eof, fstate_t *fst, int *towr)
 {
 	if (state->output == NULL)
-		state->output = (unsigned char *)malloc(state->buf_len);
-
-	if (!state->output) {
-		FPLOG(FATAL, "failed to alloc %zd bytes for output buffer!\n", state->buf_len);
-		//*towr = 0;
-		raise(SIGQUIT);
-	}
+		state->output = slack_alloc(state->buf_len, state->slackpre, state->slackpost,
+					    CLEAR_NONE, &ddr_plug, state->seq);
 
 	size_t curr_pos = 0;
 	int ret_xz = 0;
@@ -337,14 +332,12 @@ unsigned char* lzma_algo(unsigned char *bf, lzma_state *state, int eof, fstate_t
 			if (state->strm.avail_out < 4096) {
 				const size_t old_blen = state->buf_len;
 				state->buf_len += state->buf_len/2 + 65536;
-				state->output = (unsigned char *)realloc(state->output, state->buf_len);
+				state->output = slack_realloc(state->output, state->buf_len, state->slackpre, state->slackpost,
+							      CLEAR_NONE, &ddr_plug, state->seq);
 				FPLOG(DEBUG, "increased output buffer from %zi to %zi\n", old_blen, state->buf_len);
 
-				if (!state->output) {
-					FPLOG(FATAL, "failed to realloc %zd bytes for output buffer!\n", state->buf_len);
-					raise(SIGQUIT);
-					break;
-				}
+				if (!state->output)
+			       		break;
 			}
 			curr_pos += maxlen - state->strm.avail_out;
 		}
@@ -377,17 +370,11 @@ unsigned char* lzma_blk_cb(fstate_t *fst, unsigned char* bf,
 
 	const loff_t hsz = fst->ipos - state->next_ipos;
 	const int origtowr = *towr;
-	if (hsz > 0) {
+	if ((hsz > 0 && !eof) || hsz > 12) {
 		/* FIXME: bf should be zero-filled as well, do we really need our own? */
-		if (!state->zero_buf) {
-			state->zero_buf = malloc(state->zero_size);
-			if (!state->zero_buf) {
-				FPLOG(FATAL, "failed to allocate zeroed buffer of size %zd to handle holes", state->zero_size);
-				raise(SIGQUIT);
-				return 0;
-			}
-			memset(state->zero_buf, 0, state->zero_size);
-		}
+		if (!state->zero_buf)
+	       		state->zero_buf = slack_alloc(state->zero_size, state->slackpre, state->slackpost,
+						      CLEAR_ALL, &ddr_plug, state->seq);
 		//const int backup_towr = *towr;
 		if (state->hole == -1) {
 			state->hole = *towr;

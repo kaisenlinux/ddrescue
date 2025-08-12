@@ -230,6 +230,12 @@ dd_rescue has a few nifty features:
 * Detection of sparsity after decryption/decompression (1.99.18).
 * Handle backward copy with encryption, also detect sparsity after decryption.
   (1.99.19)
+* Ensure that we support complex chains even with sparse files (1.99.20).
+* Double -p makes failure to copy ownership/perms/times/xattrs reported in
+  exit code. Failure on copying ownership/perms will error out early (to avoid
+  exposing sensitive data).
+* 1.99.21 was made safe against interrupted and short read/write calls and
+  the option -H allows to test for this. (This only worked partically before.)
 
 
 Copyright

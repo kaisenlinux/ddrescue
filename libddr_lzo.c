@@ -49,11 +49,8 @@
 #endif
 
 // TODO: pass at runtime rather than compile time
-#ifdef LZODEBUG
-# define LZO_DEBUG(x) x
-#else
-# define LZO_DEBUG(x) do {} while (0)
-#endif
+#define LZO_DEBUG(x) \
+	do { if (state->debug) x; } while(0)
 
 /* Some bits from lzop -- we strive for some level of compatibility */
 /* We use version numbers that are not likely to clash with lzop anytime soon;
@@ -179,7 +176,7 @@ enum compmode {AUTO=0, COMPRESS, DECOMPRESS};
 
 typedef struct _lzo_state {
 	void *workspace;
-	unsigned char *dbuf, *orig_dbuf;
+	unsigned char *dbuf;
 	unsigned char *obuf;
 	size_t dbuflen;
        	int hdroff;
@@ -208,8 +205,6 @@ typedef struct _lzo_state {
 	int saved_c_off;
 } lzo_state;
 
-#define FPLOG(lvl, fmt, args...) \
-	plug_log(ddr_plug.logger, state->seq, stderr, lvl, fmt, ##args)
 
 static unsigned int pagesize = 4096;
 
@@ -259,7 +254,7 @@ void lzo_hdr(header_t* hdr, loff_t hole, lzo_state *state)
 	state->hdr_seen = sizeof(header_t);
 }
 
-int lzo_parse_hdr(unsigned char* bf, loff_t* hole, lzo_state *state)
+int lzo_parse_hdr(unsigned char* bf, loff_t* hole, lzo_state *state, int eof)
 {
 	header_t *hdr = (header_t*)bf;
 	if (ntohs(hdr->version_needed_to_extract) > 0x1030 && ntohs(hdr->version_needed_to_extract) != F_VERSION) {
@@ -306,8 +301,8 @@ int lzo_parse_hdr(unsigned char* bf, loff_t* hole, lzo_state *state)
 	uint32_t comp = (state->flags & F_H_CRC32 ? lzo_crc32(  CRC32_INIT_VALUE, (const lzo_bytep)hdr, sizeof(header_t)-NAMELEN+hdr->nmlen-4)
 						: lzo_adler32(ADLER32_INIT_VALUE, (const lzo_bytep)hdr, sizeof(header_t)-NAMELEN+hdr->nmlen-4));
 	if (cksum != comp) {
-		FPLOG(FATAL, "header fails checksum %08x != %08x\n",
-			cksum, comp);
+		FPLOG(eof? WARN: FATAL, "header (offs %li) fails checksum %08x != %08x\n",
+			bf-state->obuf, cksum, comp);
 		return -6;
 	}
 	int off = sizeof(header_t) + hdr->nmlen-NAMELEN;
@@ -455,64 +450,17 @@ int lzo_plug_init(void **stat, char* param, int seq, const opt_t *opt)
 	return err;
 }
 
-void* slackalloc(size_t ln, lzo_state *state)
-{
-	unsigned char *ptr = (unsigned char*)malloc(ln+state->slackpre+state->slackpost+pagesize);
-	if (!ptr) {
-		FPLOG(FATAL, "allocation of %i bytes failed: %s\n",
-			ln+state->slackpre+state->slackpost, strerror(errno));
-		raise(SIGQUIT);
-	}
-	state->orig_dbuf = ptr;
-	ptr += state->slackpre + pagesize-1;
-	ptr -= (unsigned long)ptr%pagesize;
-	return ptr;
-}
-
-void* slackrealloc(void* base, size_t newln, lzo_state *state)
-{
-	unsigned char *ptr, *optr;
-	++state->nr_realloc;
-	/* Note: We could use free and malloc IF we have no data decompressed yet 
-	 * (d_off == 0) and no slack space from plugins behind us is needed.
-	 * Probably not worth the effort ... */
-	ptr = (unsigned char*)malloc(newln+state->slackpre+state->slackpost+pagesize);
-	/* Note: We can be somewhat graceful if realloc fails by returning the original
-	 * pointer and buffer size and raise(SIGQUIT) -- this would result in 
-	 * writing out data that has been processed already.
-	 */
-	if (!ptr) {
-		FPLOG(FATAL, "reallocation of %i bytes failed: %s\n",
-			newln+state->slackpre+state->slackpost, strerror(errno));
-		raise(SIGQUIT);
-		return NULL;
-	}
-	optr = ptr;
-	ptr += state->slackpre + pagesize-1;
-	ptr -= (unsigned long)ptr%pagesize;
-	memcpy(ptr-state->slackpre, (char*)base-state->slackpre, state->dbuflen+state->slackpre+state->slackpost);
-	free(state->orig_dbuf);
-	state->orig_dbuf = optr;
-	return ptr;
-}
-
-void slackfree(void* base, lzo_state *state)
-{
-	//free(base-state->slackpre);
-	free(state->orig_dbuf);
-}
-
 int lzo_plug_release(void **stat)
 {
 	if (!stat | !*stat)
 		return -1;
 	lzo_state *state = (lzo_state*)*stat;
 	if (state->dbuflen)
-		slackfree(state->dbuf, state);
+		slack_free(state->dbuf, state->slackpre);
 	if (state->workspace)
 		free(state->workspace);
 	if (state->buf_zero)
-		free(state->buf_zero);
+		slack_free(state->buf_zero, state->slackpre);
 	free(*stat);
 	return 0;
 }
@@ -555,10 +503,11 @@ int lzo_open(const opt_t *opt, int ilnchg, int olnchg, int ichg, int ochg,
 	} else {
 		state->dbuflen = 4*bsz+16;
 	}
-	state->slackpost = totslack_post;
 	state->slackpre  = totslack_pre ;
+	state->slackpost = totslack_post;
 	state->islast = islast;
-	state->dbuf = (unsigned char*)slackalloc(state->dbuflen, state);
+	state->dbuf = (unsigned char*)slack_alloc(state->dbuflen, totslack_pre, totslack_post,
+						  CLEAR_NONE, &ddr_plug, state->seq);
 	if (state->do_bench) 
 		state->cpu = 0;
 	if (state->mode == COMPRESS) {
@@ -637,6 +586,8 @@ int encode_hole(unsigned char* bhdp, int nopre, loff_t hsz, int hlen, lzo_state 
 		return encode_hole_swap(bhdp, nopre, hsz, hlen, state);
 	hlen = sizeof(lzop_hdr)+sizeof(header_t)+4;
 	unsigned char* ptr = bhdp - (nopre? 0: hlen);
+	LZO_DEBUG(FPLOG(DEBUG, " hole ptr %p, zero %p, obuf %p, dbuf %p\n",
+			ptr, state->buf_zero, state->obuf, state->dbuf));
 	memset(ptr, 0, 4);	/* EOF */
 	ptr += 4;
 	memcpy(ptr, lzop_hdr, sizeof(lzop_hdr));
@@ -650,12 +601,14 @@ unsigned char* lzo_compress(fstate_t *fst, unsigned char *bf,
 			    int *towr, int eof, int *recall, lzo_state *state)
 {
 	//const loff_t ooff = fst->opos;
-	lzo_uint dst_len = state->dbuflen-3-sizeof(lzop_hdr)-sizeof(header_t);
-	unsigned char *hdrp = state->dbuf+3+sizeof(lzop_hdr);
+	lzo_uint dst_len = state->dbuflen-4-sizeof(lzop_hdr)-sizeof(header_t);
+	unsigned char *hdrp = state->dbuf+4+sizeof(lzop_hdr);
 	unsigned char *bhdp = hdrp+sizeof(header_t);
 	unsigned char *wrbf = bhdp;
 	unsigned int addwr = 0;
 	unsigned int hlen = sizeof(blockhdr_t)-4+((state->flags&(F_ADLER32_C|F_CRC32_C))? 4: 0);
+	FPLOG(DEBUG, "lzo_compress ipos %li expected %li block #%i towr %i eof %i\n",
+		fst->ipos, state->next_ipos, state->blockno, *towr, eof);
 	if (state->hdr_seen == 0) { // was: ooff == state->opts->init_opos) {
 		if (state->opts->init_opos > 0 && state->opts->extend) {
 			/* TODO: Check for multipart archive and attach a part if yes */
@@ -668,7 +621,7 @@ unsigned char* lzo_compress(fstate_t *fst, unsigned char *bf,
 				FPLOG(FATAL, "Can only extend lzo files with existing magic\n", ln);
 				abort();
 			};
-			if (lzo_parse_hdr(bhdp+sizeof(lzop_hdr), NULL, state) < 0)
+			if (lzo_parse_hdr(bhdp+sizeof(lzop_hdr), NULL, state, 0) < 0)
 				abort();
 			/* TODO (optional): Jump block headers to see whether we are at a valid offset */
 			/* Due to different flags, blkhdr size could have changed ... */
@@ -685,10 +638,10 @@ unsigned char* lzo_compress(fstate_t *fst, unsigned char *bf,
 			}
 		}
 		if (state->hdr_seen == 0) {
-			memcpy(state->dbuf+3, lzop_hdr, sizeof(lzop_hdr));
+			memcpy(state->dbuf+4, lzop_hdr, sizeof(lzop_hdr));
 			lzo_hdr((header_t*)hdrp, 0, state);
 			addwr = sizeof(header_t) + sizeof(lzop_hdr);
-			wrbf = state->dbuf+3;
+			wrbf = state->dbuf+4;
 			state->cmp_hdr += sizeof(lzop_hdr)+sizeof(header_t);
 		}
 	}
@@ -809,9 +762,9 @@ unsigned char* lzo_search_hdr(fstate_t *fst, unsigned char* bf, int *towr,
 		if (unc_len == lzo1 && cmp_len == lzo2 
 				&& fst->buf[off+8] == lzop_hdr[8]) {
 			loff_t hole;
-			int hlen = lzo_parse_hdr(fst->buf+off+sizeof(lzop_hdr), &hole, state);
-			FPLOG(INFO, "lzop header at %i (sz %i/hole %li)\n", fst->ipos+off, 
-				hlen+sizeof(lzop_hdr), hole);
+			int hlen = lzo_parse_hdr(fst->buf+off+sizeof(lzop_hdr), &hole, state, eof);
+			FPLOG(INFO, "lzop header at %i (sz %i+%i/hole %li)\n", fst->ipos+off,
+				hlen, sizeof(lzop_hdr), hole);
 			/* FIXME: This optimization, just jumping over the hole,
 			 * is only valid if there is no plugin behind us in the chain.
 			 * Otherwise, we need to send down zeroes, just to have them
@@ -1007,12 +960,10 @@ int recover_decompr_error(lzo_state *state, fstate_t *fst,
 /* Output zero-filled blocks on holes if we're not the last in line */
 unsigned char* lzo_decompress_hole(fstate_t *fst, int *towr, lzo_state *state)
 {
-	if (!state->buf_zero) {
-		state->buf_zero = malloc(state->opts->softbs);
-		assert(state->buf_zero);
-		memset(state->buf_zero, 0, state->opts->softbs);
-	}
 	const int ln = MIN(state->inhole, state->opts->softbs);
+	if (!state->buf_zero)
+       		state->buf_zero = slack_alloc(state->opts->softbs, state->slackpre, state->slackpost,
+					      CLEAR_ALL, &ddr_plug, state->seq);
 	FPLOG(DEBUG, "zero out hole (left %i, process %i)\n",
 		state->inhole, ln);
 	state->inhole -= ln;
@@ -1064,13 +1015,13 @@ unsigned char* lzo_decompress(fstate_t *fst, unsigned char* bf, int *towr,
 					FPLOG(FATAL, "lzop magic broken\n");
 					abort();
 				}
-				if (lzo_parse_hdr(state->dbuf+sizeof(lzop_hdr), NULL, state) < 0)
+				if (lzo_parse_hdr(state->dbuf+sizeof(lzop_hdr), NULL, state, 0) < 0)
 					abort();
 			}
 		} else {
 			state->cmp_hdr = sizeof(lzop_hdr);
 			c_off += sizeof(lzop_hdr);
-			int err = lzo_parse_hdr(bf+c_off, NULL, state);
+			int err = lzo_parse_hdr(bf+c_off, NULL, state, 0);
 			if (err < 0)
 				abort();
 			c_off += err;
@@ -1079,7 +1030,7 @@ unsigned char* lzo_decompress(fstate_t *fst, unsigned char* bf, int *towr,
 	/* Now do processing: Do we have a full block? */
 	const size_t totbufln = state->opts->softbs - ddr_plug.slack_post*((state->opts->softbs+15)/16);
 	unsigned char* effbf = NULL;
-	size_t have_len = 0;
+	ssize_t have_len = 0;
 	uint32_t cmp_len = 0, unc_len = 0;
 	int bhsz = sizeof(blockhdr_t);
 	FPLOG(DEBUG, "decompress ipos %" LL "d (next %" LL "i)/opos %" LL "d, inlen %i, hdroff %i\n",
@@ -1095,13 +1046,16 @@ unsigned char* lzo_decompress(fstate_t *fst, unsigned char* bf, int *towr,
 		char is_err = 0;
 		effbf = bf+c_off+state->hdroff;
 		lzo_uint dst_len;
-		LZO_DEBUG(FPLOG(DEBUG, "dec blk @ %p (offs %i, stoffs %i, bln %zi, tbw %i)\n",
-				effbf, effbf-state->obuf, state->hdroff, totbufln, inlen));
 		blockhdr_t *hdr = (blockhdr_t*)effbf;
 		have_len = inlen-state->hdroff-c_off;
+		LZO_DEBUG(FPLOG(DEBUG, " dec blk @ %p (offs %i, stoffs %i, bln %zi, tbw %i have %i)\n",
+				effbf, effbf-state->obuf, state->hdroff, totbufln, inlen, have_len));
 		/* Not even space for unc_len/EOF */
-		if (have_len < 4)
+		if (have_len < 4) {
+			unc_len = 0;
+			bhsz = 0;
 			break;
+		}
 		unc_len = ntohl(hdr->uncmpr_len);
 		bhsz = bhdr_size(state, unc_len, cmp_len);
 		if (!unc_len && (!(state->flags & F_MULTIPART) || (eof && have_len < 8))) {
@@ -1113,17 +1067,26 @@ unsigned char* lzo_decompress(fstate_t *fst, unsigned char* bf, int *towr,
 					state->cmp_ln+state->cmp_hdr);
 			break;
 		}
-		if (!unc_len && state->flags & F_MULTIPART && have_len > 32) {
+		if (!unc_len && state->flags & F_MULTIPART && have_len >= sizeof(lzop_hdr)+sizeof(header_t)+4) {
 			/* EOF with new LZOP sig */
-			LZO_DEBUG(FPLOG(DEBUG, "Next part ...\n"));
+			LZO_DEBUG(FPLOG(DEBUG, " Next part ...\n"));
 			if (memcmp(effbf+4, lzop_hdr, sizeof(lzop_hdr))) {
-				FPLOG(FATAL, "EOF with MULTIPART, but no new hdr\n");
+				FPLOG(eof? WARN: FATAL, "EOF with MULTIPART, but no new hdr (%zi bytes)\n",
+					have_len);
 				//DRAIN("EOF");
 				//raise(SIGQUIT);
-				//break;
+				fst->nrerr++;
+				break;
 			}
 			loff_t hsz;
-			int hln = lzo_parse_hdr(effbf+4+sizeof(lzop_hdr), &hsz, state);
+			int hln = lzo_parse_hdr(effbf+4+sizeof(lzop_hdr), &hsz, state, eof);
+			if (hln < 0) {
+				FPLOG(eof? INFO: WARN, "faulty header @ %li: %i, have %i/%i eof %i\n",
+					/*fst->ipos+*/(effbf-state->obuf+4+sizeof(lzop_hdr)), hln, have_len,
+					sizeof(lzop_hdr)+sizeof(header_t)+4, eof);
+				if (!eof)
+					fst->nrerr++;
+			}
 			bhsz = hln+sizeof(lzop_hdr)+4;
 			if (!hsz) {
 				if (!state->opts->quiet)
@@ -1156,7 +1119,7 @@ unsigned char* lzo_decompress(fstate_t *fst, unsigned char* bf, int *towr,
 		if (cmp_len == unc_len) 
 			cmp_cksum = unc_cksum;
 		
-		LZO_DEBUG(FPLOG(DEBUG, "dec blk @ %p (hdroff %i, cln %i, uln %i, have %i)\n",
+		LZO_DEBUG(FPLOG(DEBUG, " dec blk @ %p (hdroff %i, cln %i, uln %i, have %i)\n",
 				effbf, c_off+state->hdroff, unc_len, cmp_len, have_len));
 		/* Block incomplete? Then we're done for this round ... */
 		if (have_len < bhsz+cmp_len)
@@ -1221,12 +1184,12 @@ unsigned char* lzo_decompress(fstate_t *fst, unsigned char* bf, int *towr,
 						unc_len, state->cmp_ln+state->cmp_hdr);
 			size_t newlen = unc_len+d_off+255;
 			newlen -= newlen%256;
-			unsigned char *newbuf = (unsigned char*)slackrealloc(state->dbuf, newlen, state);
+			state->dbuf = slack_realloc(state->dbuf, newlen, state->slackpre, state->slackpost,
+						    CLEAR_NONE, &ddr_plug, state->seq);
 			/* if realloc failed, exit loop, write out existing data and exit;
 			 * slackrealloc has done raise(SIGQUIT) already ... */
-			if (!newbuf)
+			if (!state->dbuf)
 				break;
-			state->dbuf = newbuf;
 			state->dbuflen = newlen;
 			dst_len = newlen-d_off;
 		}
@@ -1241,7 +1204,7 @@ unsigned char* lzo_decompress(fstate_t *fst, unsigned char* bf, int *towr,
 				FPLOG(WARN, "compressed %i > uncompressed %i breaks lzop\n",
 					cmp_len, unc_len);
 			err = state->algo->decompr(effbf+bhsz, cmp_len, (unsigned char*)state->dbuf+d_off, &dst_len, NULL);
-			LZO_DEBUG(FPLOG(DEBUG, "decompressed %i@%p -> %i\n",
+			LZO_DEBUG(FPLOG(DEBUG, " decompressed %i@%p -> %i\n",
 				cmp_len, effbf+bhsz, dst_len));
 			if (dst_len != unc_len) {
 				fst->nrerr++;
@@ -1362,6 +1325,7 @@ unsigned char* lzo_decompress(fstate_t *fst, unsigned char* bf, int *towr,
 	//if (!*recall && spcleft < state->opts->softbs)
 	//       *recall = RECALL_MARK;
 	/* FIXME */
+	//assert(have_len >= 0);
 	//int nextrd = *recall != RECALL_NONE? 0: state->opts->softbs;
 	int nextrd = *recall? 0: state->opts->softbs;
 	/* Trivial case: No bytes to store */
@@ -1381,7 +1345,7 @@ unsigned char* lzo_decompress(fstate_t *fst, unsigned char* bf, int *towr,
 		/* We have enough space to just append */
 		state->hdroff -= inlen-c_off;
 		fst->buf += inlen;
-		LZO_DEBUG(FPLOG(DEBUG, "append  @ %p\n", fst->buf));
+		LZO_DEBUG(FPLOG(DEBUG, " append  @ %p\n", fst->buf));
 
 	/* OK, now for the bad cases:
 	 * (a) We can't append, but everything fits if we memmove to start
@@ -1389,9 +1353,9 @@ unsigned char* lzo_decompress(fstate_t *fst, unsigned char* bf, int *towr,
 	 */
 	/* Simplify to bhsz+cmp_len+state->softbs < totbufln ? */
 	} else if (bhsz+cmp_len < totbufln &&
-		   have_len+nextrd < totbufln) {
+		   have_len+nextrd < totbufln && have_len >= 0) {
 		/* We need to move block to beg of buffer */
-		LZO_DEBUG(FPLOG(DEBUG, "move %i bytes to buffer head\n", have_len));
+		LZO_DEBUG(FPLOG(DEBUG, " move %i bytes to buffer head\n", have_len));
 		if (effbf != state->obuf) {
 			memmove(state->obuf, effbf, have_len);
 			++state->nr_memmove;

@@ -1,7 +1,7 @@
 # (c) garloff@suse.de, 99/10/09, GNU GPL
 # (c) kurt@garloff.de, 2010 -- 2021, GNU GPL v2 or v3
 
-VERSION = 1.99.20
+VERSION = 1.99.21
 
 DESTDIR = 
 SRCDIR ?= .
@@ -38,7 +38,7 @@ LIB = lib
 LIBDIR = /usr/$(LIB)
 COMPILER = $(shell $(CC) --version | head -n1)
 ID = $(shell git describe --tags || cat REL-ID)
-DEFINES = -DVERSION=\"$(VERSION)\"  -D__COMPILER__="\"$(COMPILER)\"" -DID=\"$(ID)\" # -DPLUGSEARCH="\"$(LIBDIR)\""
+DEFINES = -DIO_HAVOC=1 -DVERSION=\"$(VERSION)\"  -D__COMPILER__="\"$(COMPILER)\"" -DID=\"$(ID)\" # -DPLUGSEARCH="\"$(LIBDIR)\""
 OUT = -o dd_rescue
 PIC = -fPIC
 PIE = -fPIE
@@ -261,7 +261,7 @@ endif
 # Automated dependency generation
 .dep: $(SRCDIR)/Makefile config.h $(SRCDIR)/*.h $(SRCDIR)/*.c
 	#$(CC) $(CFLAGS) -DGEN_DEP $(ARCHFLAGS) -MM $(SRCDIR)/*.c >.dep
-	$(CC) $(CFLAGS) -DGEN_DEP $(DEP_SSE) -I . -MM $(SRCDIR)/*.c >.dep
+	$(CC) $(CFLAGS) -DGEN_DEP $(DEP_SSE) -I . -I $(SRCDIR) -MM $(SRCDIR)/*.c >.dep
 	sed 's/\.o:/\.po:/' <.dep >.dep2
 	cat .dep2 >> .dep
 	rm .dep2
@@ -273,10 +273,10 @@ dep:
 	make .dep
 
 # These need optimization
-archdep.o: $(SRCDIR)/archdep.c archdep.h config.h
+archdep.o: $(SRCDIR)/archdep.c $(SRCDIR)/archdep.h config.h
 	$(CC) $(CFLAGS_OPT) $(ARCHFLAGS) $(PIE) -c $<
 
-archdep.po: $(SRCDIR)/archdep.c archdep.h config.h
+archdep.po: $(SRCDIR)/archdep.c $(SRCDIR)/archdep.h config.h
 	$(CC) $(CFLAGS_OPT) $(ARCHFLAGS) $(PIC) -c $<
 
 frandom.o: $(SRCDIR)/frandom.c config.h
@@ -436,7 +436,7 @@ sha1: $(SRCDIR)/sha1.c $(SRCDIR)/sha1.h $(SRCDIR)/hash.h config.h
 	$(CC) $(CFLAGS_OPT) $(PIE) $(LDPIE) -DSHA1_MAIN -o $@ $<
 
 fuzz_lzo: fuzz_lzo.o
-	$(CC) -o $@ $(LDPIE) $^ -llzo2
+	$(CC) -o $@ $(CFLAGS) $(LDPIE) $^ -llzo2
 
 # More dd_rescue variants
 libfalloc-dl: dd_rescue
@@ -475,6 +475,9 @@ fiemap: $(SRCDIR)/fiemap.c $(SRCDIR)/fiemap.h $(SRCDIR)/fstrim.h config.h fstrim
 
 pbkdf2: $(SRCDIR)/ossl_pbkdf2.c
 	$(CC) $(CFLAGS) $(PIE) $(LDPIE) -o $@ $< $(CRYPTOLIB)
+
+test_aligned_alloc: $(SRCDIR)/test_aligned_alloc.c
+	$(CC) $(CFLAGS) $(PIE) $(LDPIE) -o $@ $<
 
 test_aes: $(SRCDIR)/test_aes.c $(AESNI_O) $(AES_ARM64_O) aes_c.o secmem.o sha256.o $(SHAOBJ) archdep.o $(AES_OSSL_O) aes.o $(SRCDIR)/aesni.h $(SRCDIR)/aes_arm64.h config.h $(OBJECTS2)
 	$(CC) $(CFLAGS) $(PIE) $(LDPIE) $(DEF) -o $@ $< $(AESNI_O) $(AES_ARM64_O) aes_c.o secmem.o sha256.o $(SHAOBJ) $(AES_OSSL_O) aes.o archdep.o $(OBJECTS2) $(CRYPTOLIB)
@@ -717,9 +720,9 @@ check_lzo: $(TARGETS)
 	md5sum -c MD5.2
 	@rm -f dd_rescue.lzo dd_rescue.cmp MD5.1 MD5.2
 	# Sparse testing and MULTIPART testing and extend
-	$(VG) ./dd_rescue -ta -m 64k /dev/zero test
-	$(VG) ./dd_rescue -ax dd_rescue test
-	$(VG) ./dd_rescue -axm 128k /dev/zero test
+	$(VG) ./dd_rescue -qta -m 64k /dev/zero test
+	$(VG) ./dd_rescue -qax -m 196608 dd_rescue test
+	$(VG) ./dd_rescue -qaxm 131080 /dev/zero test
 	$(VG) ./dd_rescue -taL ./libddr_MD5.so test test2
 	$(VG) ./dd_rescue -taL ./libddr_MD5.so=output,./libddr_lzo.so,./libddr_MD5.so=output test test.lzo > MD5
 	md5sum -c MD5
@@ -729,11 +732,13 @@ check_lzo: $(TARGETS)
 	$(LZOP) -Nvl test.lzo
 	cat dd_rescue >> test
 	$(VG) ./dd_rescue -taL ./libddr_lzo.so,./libddr_MD5.so=output test.lzo test.cmp > MD5
+	du test test.lzo
 	md5sum -c MD5
 	cmp test test.cmp
 	if type -p sha224sum >/dev/null 2>&1; then hashlist="md5 sha1 sha224 sha256 sha384 sha512"; else hashlist="md5 sha1 sha256 sha512"; fi; \
 	for hash in $$hashlist; do $(VG) ./dd_rescue -b16k -TL ./libddr_lzo.so=compress,./libddr_hash.so=$$hash:outfd=1 dd_rescue dd_rescue.lzo > ddr.hash || exit 1; $${hash}sum -c ddr.hash || exit 2; done
 	rm -f MD5 test test.lzo test.cmp ddr.hash dd_rescue.lzo
+	./test_lzo_dec.sh
 	
 check_lzo_algos: $(TARGETS)
 	for alg in lzo1x_1 lzo1x_1_11 lzo1x_1_12 lzo1x_1_15 lzo1x_999 lzo1y_1 lzo1y_999 lzo1f_1 lzo1f_999 lzo1b_1 lzo1b_2 lzo1b_3 lzo1b_4 lzo1b_5 lzo1b_6 lzo1b_7 lzo1b_8 lzo1b_9 lzo1b_99 lzo1b_999 lzo2a_999; do ./dd_rescue -qATL ./libddr_lzo.so=algo=$$alg:benchmark dd_rescue dd_rescue.lzo || exit 1; $(LZOP) -lt dd_rescue.lzo; ./dd_rescue -qATL ./libddr_lzo.so=benchmark dd_rescue.lzo dd_rescue.cmp || exit 2; cmp dd_rescue dd_rescue.cmp || exit 3; done
@@ -750,28 +755,30 @@ check_lzo_fuzz: $(TARGETS) fuzz_lzo
 
 check_sparse: $(TARGETS)
 	@echo "***** dd_rescue sparse tests with plugins *****"
-	./test_sparse.sh
-	./test_sparse.sh "-L ./libddr_null.so=unsparse"
-	./test_sparse.sh "-L ./libddr_hash.so=sha256"
-	./test_sparse.sh "-L ./libddr_crypt.so=AES192-CTR:weakrnd:pbkdf2:pass=ABC:skiphole:" "encrypt" "decrypt"
-	./test_sparse.sh "-L ./libddr_crypt.so=AES192-CTR:weakrnd:pbkdf2:pass=ABC:" "encrypt" "decrypt"
-	if test $(HAVE_LZO) = 1; then ./test_sparse.sh "-L ./libddr_lzo.so=" "compress" "decompress"; fi
-	if test $(HAVE_LZMA) = 1; then ./test_sparse.sh "-L ./libddr_lzma.so=" "compress" "decompress"; fi
+	./test_sparse.sh "-H 15"
+	./test_sparse.sh "-H 15 -L ./libddr_null.so=unsparse"
+	./test_sparse.sh "-H 15 -L ./libddr_hash.so=sha256"
+	./test_sparse.sh "-H 15 -L ./libddr_crypt.so=AES192-CTR:weakrnd:pbkdf2:pass=ABC:skiphole:" "encrypt" "decrypt"
+	./test_sparse.sh "-H 15 -L ./libddr_crypt.so=AES192-CTR:weakrnd:pbkdf2:pass=ABC:" "encrypt" "decrypt"
+	if test $(HAVE_LZO) = 1; then ./test_sparse.sh "-H 15 -L ./libddr_lzo.so=" "compress" "decompress"; fi
+	if test $(HAVE_LZMA) = 1; then ./test_sparse.sh "-H 15 -L ./libddr_lzma.so=" "compress" "decompress"; fi
 	# Sparse files with odd sizes
-	./test_sparse.sh "-L ./libddr_null.so=unsparse" "" "" 8388612
-	./test_sparse.sh "-L ./libddr_hash.so=sha256" "" "" 8388612
-	./test_sparse.sh "-L ./libddr_crypt.so=AES192-CTR:weakrnd:pbkdf2:pass=ABC:skiphole:" "encrypt" "decrypt" 8388612
-	./test_sparse.sh "-L ./libddr_crypt.so=AES192-CTR:weakrnd:pbkdf2:pass=ABC:" "encrypt" "decrypt" 8388612
-	if test $(HAVE_LZO) = 1; then ./test_sparse.sh "-L ./libddr_lzo.so=" "compress" "decompress" 8388612; fi
-	if test $(HAVE_LZMA) = 1; then ./test_sparse.sh "-L ./libddr_lzma.so=" "compress" "decompress" 8388612; fi
+	./test_sparse.sh "-H 15 -L ./libddr_null.so=unsparse" "" "" 8388612
+	./test_sparse.sh "-H 15 -L ./libddr_hash.so=sha256" "" "" 8388612
+	./test_sparse.sh "-H 15 -L ./libddr_crypt.so=AES192-CTR:weakrnd:pbkdf2:pass=ABC:skiphole:" "encrypt" "decrypt" 8388612
+	./test_sparse.sh "-H 15 -L ./libddr_crypt.so=AES192-CTR:weakrnd:pbkdf2:pass=ABC:" "encrypt" "decrypt" 8388612
+	if test $(HAVE_LZO) = 1; then ./test_sparse.sh "-H 15 -L ./libddr_lzo.so=" "compress" "decompress" 8388612; fi
+	if test $(HAVE_LZMA) = 1; then ./test_sparse.sh "-H 15 -L ./libddr_lzma.so=" "compress" "decompress" 8388612; fi
 	# Sparse files with holes at end and at beginning
-	./test_sparse.sh "" "" "" 7596032 1
-	./test_sparse.sh "-L ./libddr_null.so=unsparse" "" "" 7596032 1
-	./test_sparse.sh "-L ./libddr_hash.so=sha256" "" "" 7596032 1
-	./test_sparse.sh "-L ./libddr_crypt.so=AES192-CTR:weakrnd:pbkdf2:pass=ABC:skiphole:" "encrypt" "decrypt" 7596032 1
-	./test_sparse.sh "-L ./libddr_crypt.so=AES192-CTR:weakrnd:pbkdf2:pass=ABC:" "encrypt" "decrypt" 7596032 1
-	if test $(HAVE_LZO) = 1; then ./test_sparse.sh "-L ./libddr_lzo.so=" "compress" "decompress" 7596032 1; fi
-	if test $(HAVE_LZMA) = 1; then ./test_sparse.sh "-L ./libddr_lzma.so=" "compress" "decompress" 7596032 1; fi
+	./test_sparse.sh "-H 15 " "" "" 7596032 1
+	./test_sparse.sh "-H 15 -L ./libddr_null.so=unsparse" "" "" 7596032 1
+	./test_sparse.sh "-H 15 -L ./libddr_hash.so=sha256" "" "" 7596032 1
+	./test_sparse.sh "-H 15 -L ./libddr_crypt.so=AES192-CTR:weakrnd:pbkdf2:pass=ABC:skiphole:" "encrypt" "decrypt" 7596032 1
+	./test_sparse.sh "-H 15 -L ./libddr_crypt.so=AES192-CTR:weakrnd:pbkdf2:pass=ABC:" "encrypt" "decrypt" 7596032 1
+	if test $(HAVE_LZO) = 1; then ./test_sparse.sh "-H 15 -L ./libddr_lzo.so=" "compress" "decompress" 7596032 1; fi
+	if test $(HAVE_LZMA) = 1; then ./test_sparse.sh "-H 15 -L ./libddr_lzma.so=" "compress" "decompress" 7596032 1; fi
+	if test $(HAVE_LZO) = 1; then ./test_sparse_compress_crypt.sh; fi
+	if test $(HAVE_LZMA) = 1; then ./test_sparse_compress_crypt.sh lzma; fi
 
 
 ALGS = AES128-ECB AES128-CBC AES128-CTR AES128+-ECB AES128+-CBC AES128+-CTR AES128x2-ECB AES128x2-CBC AES128x2-CTR \

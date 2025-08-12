@@ -20,6 +20,8 @@
 #include <stdlib.h>
 #include <stdarg.h>
 #include <string.h>
+#include <errno.h>
+#include <signal.h>
 
 #ifdef HAVE_FCNTL_H
 #include <fcntl.h>
@@ -96,6 +98,7 @@ typedef int (_close_callback)(loff_t ooff, void **stat);
 typedef int (_release_callback)(void **stat);
 
 
+/* Logging */
 enum ddrlog_t { NOHDR=0, DEBUG, INFO, WARN, GOOD, FATAL, INPUT };
 typedef int (_fplog_upcall)(FILE* const f, enum ddrlog_t logpre, 
 			    const char* const prefix, const char* const fmt, 
@@ -126,18 +129,12 @@ int plug_log(plug_logger_t *logger, int seq, FILE* const f,
 	return ret;
 }
 
-/* 64bit abs */
-static inline
-loff_t off_labs(const loff_t diff)
-{
-	if (diff < 0)
-		return -diff;
-	else
-		return  diff;
-}
+#define FPLOG_(seq, lvl, fmt, args...) \
+	plug_log(ddr_plug.logger, seq, stderr, lvl, fmt, ##args)
+#define FPLOG(lvl, fmt, args...) \
+	FPLOG_(state->seq, lvl, fmt, ##args)
 
-
-
+/* The ddr_plugin structure */
 typedef struct _ddr_plugin {
 	/* Will be filled by loader */
 	const char* name;
@@ -178,4 +175,74 @@ typedef struct _ddr_plugin {
 	/* Filled by loader: Parameters */
 	char* param;
 } ddr_plugin_t;
+
+/* Helpers */
+
+/* 64bit abs */
+static inline
+loff_t off_labs(const loff_t diff)
+{
+	if (diff < 0)
+		return -diff;
+	else
+		return  diff;
+}
+
+typedef enum _cleartp { CLEAR_NONE = 0, CLEAR_SLACK, CLEAR_MAIN, CLEAR_ALL } cleartp;
+
+static inline
+void slack_clear(unsigned char* ptr, const size_t ln, const unsigned int pre, 
+                 const unsigned int post, const cleartp clear)
+{
+	if (clear == CLEAR_ALL)
+		memset(ptr, 0, ln+pre+post);
+	else if (clear == CLEAR_MAIN)
+		memset(ptr+pre, 0, ln);
+	else if (clear == CLEAR_SLACK) {
+		memset(ptr, 0, pre);
+		memset(ptr+pre+ln, 0, post);
+	}
+}
+
+static
+unsigned char * _slack_process(unsigned char *ptr, const size_t ln, const unsigned int pre,
+			       const unsigned int post, const cleartp clear,
+			       const ddr_plugin_t ddr_plug, const int seq)
+{
+	if (!ptr) {
+		FPLOG_(seq, FATAL, "allocation of %i bytes failed: %s\n",
+			ln+pre+post, strerror(errno));
+		raise(SIGQUIT);
+		return NULL;
+	}
+	slack_clear(ptr, ln, pre, post, clear);
+	ptr += pre;
+	return ptr;
+}
+
+static inline
+unsigned char* slack_alloc(const size_t ln, const unsigned int pre, const unsigned int post,
+			   const cleartp clear, const ddr_plugin_t *plug, const int seq)
+{
+	unsigned char *ptr = (unsigned char*)malloc(ln+pre+post);
+	return _slack_process(ptr, ln, pre, post, clear, *plug, seq);
+}
+
+static inline
+unsigned char* slack_realloc(unsigned char *old, const size_t ln, const unsigned int pre,
+			     const unsigned int post, const cleartp clear,
+			     const ddr_plugin_t *plug, const int seq)
+{
+	//++state->nr_realloc;
+	unsigned char *ptr = (unsigned char*)realloc(old-pre, ln+pre+post);
+	return _slack_process(ptr, ln, pre, post, clear, *plug, seq);
+}
+
+static inline
+void slack_free(unsigned char *ptr, const unsigned int pre)
+{
+	free(ptr - pre);
+}
+
+
 #endif	/* _DDR_PLUGIN_H */

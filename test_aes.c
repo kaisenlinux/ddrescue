@@ -21,7 +21,10 @@
 
 void usage()
 {
-	printf("Usage: test_aes [-s[-][N]] [-w] [ALG [REP [SEED [LEN [FILL]]]]]\n");
+	printf("Usage: test_aes [-s[-][N]] [-w] [-2] [ALG [REP [SEED [LEN [FILL]]]]]\n");
+	printf("-s: shift len by N for repeated runs\n");
+	printf("-w: do a warmup round before measuring time\n");
+	printf("-2: Disable VAES (fallback to AESNI if avail), x86-64 only\n");
 	exit(0);
 }
 

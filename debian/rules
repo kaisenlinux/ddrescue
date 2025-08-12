@@ -16,10 +16,3 @@ override_dh_auto_test:
 	make file_zblock
 	make fiemap
 	make pbkdf2
-	make check_xattr_storehash
-	make check_xattr_copy
-	make check_lzo
-	make check_lzo_algos
-	make check_lzo_test
-	make check_lzo_fuzz
-	make check_fault

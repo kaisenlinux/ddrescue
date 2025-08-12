@@ -46,10 +46,6 @@
 // TODO: pass at runtime rather than compile time
 #define HASH_DEBUG(x) if (state->debug) x
 
-#define FPLOG_(seq, lvl, fmt, args...) \
-	plug_log(ddr_plug.logger, seq, stderr, lvl, fmt, ##args)
-#define FPLOG(lvl, fmt, args...) \
-	FPLOG_(state->seq, lvl, fmt, ##args)
 
 /* fwd decl */
 extern ddr_plugin_t ddr_plug;
@@ -387,7 +383,7 @@ int hash_open(const opt_t *opt, int ilnchg, int olnchg, int ichg, int ochg,
 			remain -= blen;
 			done += blen;
 		}
-		HASH_DEBUG(FPLOG(DEBUG, "Prepending %i+%i bytes (padded with %i bytes)\n",
+		HASH_DEBUG(FPLOG(DEBUG, " Prepending %i+%i bytes (padded with %i bytes)\n",
 				done, remain, blen-remain));
 		if (remain) {
 			memcpy(state->buf, state->prepend+done, remain);
@@ -436,15 +432,15 @@ void hash_last(hash_state *state, loff_t pos)
 	fprintf(stderr, "HASH_DEBUG: %s: len=%li, hashpos=%li\n", 
 		state->fname, len, state->hash_pos);
 	 */
-	HASH_DEBUG(FPLOG(DEBUG, "Last block with %i bytes\n", state->buflen));
+	HASH_DEBUG(FPLOG(DEBUG, " Last block with %i bytes\n", state->buflen));
 	if (state->append) {
 		memcpy(state->buf+state->buflen, state->append, strlen(state->append));
 		state->buflen += strlen(state->append);
-		HASH_DEBUG(FPLOG(DEBUG, "Append string with %i bytes for hash\n", strlen(state->append)));
+		HASH_DEBUG(FPLOG(DEBUG, " Append string with %i bytes for hash\n", strlen(state->append)));
 	}
 	int preln = state->prepend? round_up(strlen(state->prepend), state->alg->blksz): 0;
 	if (preln)
-		HASH_DEBUG(FPLOG(DEBUG, "Account for %i extra prepended bytes\n", preln));
+		HASH_DEBUG(FPLOG(DEBUG, " Account for %i extra prepended bytes\n", preln));
 	state->alg->hash_calc(state->buf, state->buflen, state->hash_pos+state->buflen+preln, &state->hash);
 	if (state->hmacpwd)
 		state->alg->hash_calc(state->buf, state->buflen, 
@@ -469,7 +465,7 @@ void hash_hole(fstate_t *fst, hash_state *state, loff_t holelen)
 	const unsigned int blksz = state->alg->blksz;
 	if (state->buflen) {
 		const unsigned int remain = blksz - state->buflen;
-		HASH_DEBUG(FPLOG(DEBUG, "first sparse block (drain %i)\n", state->buflen));
+		HASH_DEBUG(FPLOG(DEBUG, " first sparse block (drain %i)\n", state->buflen));
 		memset(state->buf+state->buflen, 0, remain);
 		if (holelen >= blksz-state->buflen) {
 			holelen -= remain;
@@ -480,7 +476,7 @@ void hash_hole(fstate_t *fst, hash_state *state, loff_t holelen)
 		}
 	}
 	assert(state->buflen == 0);
-	HASH_DEBUG(FPLOG(DEBUG, "bulk sparse %i\n", holelen-holelen%blksz));
+	HASH_DEBUG(FPLOG(DEBUG, " bulk sparse %i\n", holelen-holelen%blksz));
 	while (holelen >= blksz) {
 		hash_block_buf(state, 0);
 		holelen -= blksz;
@@ -488,7 +484,7 @@ void hash_hole(fstate_t *fst, hash_state *state, loff_t holelen)
 	assert(holelen >= 0 && holelen < blksz);
 	// memset(state->buf, 0, holelen);
 	state->buflen = holelen;
-	HASH_DEBUG(FPLOG(DEBUG, "sparse left %i (%i+%i)\n", holelen, state->hash_pos, state->buflen));
+	HASH_DEBUG(FPLOG(DEBUG, " sparse left %i (%i+%i)\n", holelen, state->hash_pos, state->buflen));
 	return;
 }
 
@@ -504,8 +500,14 @@ unsigned char* hash_blk_cb(fstate_t *fst, unsigned char* bf,
 	const loff_t pos = state->ilnchg?
 		state->hash_pos + state->buflen:
 		fst->ipos - state->opts->init_ipos;
-	HASH_DEBUG(FPLOG(DEBUG, "block(%i/%i): towr=%i, eof=%i, pos=%" LL "i, hash_pos=%" LL "i, buflen=%i\n",
+	HASH_DEBUG(FPLOG(DEBUG, " block(%i/%i): towr=%i, eof=%i, pos=%" LL "i, hash_pos=%" LL "i, buflen=%i\n",
 				state->seq, state->olnchg, *towr, eof, pos, state->hash_pos, state->buflen));
+#if 0
+	if (pos < state->hash_pos + state->buflen) {
+		FPLOG(DEBUG, "going backward, skip ...");
+		return bf;
+	}
+#endif
 #ifndef NO_S3_MP
 	if (state->multisz && ((!(state->hash_pos%state->multisz) && state->hash_pos && *towr) || (!*towr && state->mpbufseg))) {
 		/* TODO: Check if we have enough space and enlarge mpbuf if needed */
@@ -532,10 +534,10 @@ unsigned char* hash_blk_cb(fstate_t *fst, unsigned char* bf,
 #endif
 	// Handle hole (sparse files)
 	const loff_t holesz = pos - (state->hash_pos + state->buflen);
-	HASH_DEBUG(FPLOG(DEBUG, "Holesz %zi, pos %zi hpos %zi buflen %zi\n", \
+	HASH_DEBUG(FPLOG(DEBUG, " Holesz %zi, pos %zi hpos %zi buflen %zi\n", \
 		holesz, pos, state->hash_pos, state->buflen));
-	assert(holesz >= 0 || state->ilnchg);
 	const unsigned int blksz = state->alg->blksz;
+	assert(holesz >= 0 || state->ilnchg);
 	if (holesz && !state->ilnchg)
 		hash_hole(fst, state, holesz);
 
@@ -546,7 +548,7 @@ unsigned char* hash_blk_cb(fstate_t *fst, unsigned char* bf,
 	if (state->buflen && *towr) {
 		/* Reassemble and process first block */
 		consumed = MIN((int)blksz-state->buflen, *towr);
-		HASH_DEBUG(FPLOG(DEBUG, "Append %i bytes @ %i to store\n", consumed, pos));
+		HASH_DEBUG(FPLOG(DEBUG, " Append %i bytes @ %i to store\n", consumed, pos));
 		memcpy(state->buf+state->buflen, bf, consumed);
 		if (consumed+state->buflen == (int)blksz) {
 			hash_block_buf(state, blksz);
@@ -562,7 +564,7 @@ unsigned char* hash_blk_cb(fstate_t *fst, unsigned char* bf,
 	assert(to_process >= 0);
 	to_process -= to_process%blksz;
 	if (to_process) {
-		HASH_DEBUG(FPLOG(DEBUG, "Consume %i bytes @ %i\n", to_process, pos+consumed));
+		HASH_DEBUG(FPLOG(DEBUG, " Consume %i bytes @ %i\n", to_process, pos+consumed));
 		assert(state->buflen == 0);
 		state->alg->hash_calc(bf+consumed, to_process, -1, &state->hash);
 		if (state->hmacpwd)
@@ -577,7 +579,7 @@ unsigned char* hash_blk_cb(fstate_t *fst, unsigned char* bf,
 		FPLOG(FATAL, "Inconsistency: HASH pos %i, buff %i, st pos %" LL "i, cons %i, tbw %i\n",
 				state->hash_pos, state->buflen, pos, consumed, *towr);
 	if (to_process) {
-		HASH_DEBUG(FPLOG(DEBUG, "Store %i bytes @ %" LL "i\n", to_process, pos+consumed));
+		HASH_DEBUG(FPLOG(DEBUG, " Store %i bytes @ %" LL "i\n", to_process, pos+consumed));
 		assert(state->buflen == 0);
 		memcpy(state->buf+state->buflen, bf+consumed, to_process);
 		state->buflen = to_process;
@@ -772,7 +774,7 @@ int hash_close(loff_t ooff, void **stat)
 	if (state->set_xattr)
 		err += write_xattr(state, res);
 #endif
-	return err;
+	return -err;
 }
 
 static char _kout_buf[2049];

@@ -70,11 +70,6 @@
 //char have_aesni;
 #endif
 
-#define FPLOG_(seq, lvl, fmt, args...) \
-	plug_log(ddr_plug.logger, seq, stderr, lvl, fmt, ##args)
-#define FPLOG(lvl, fmt, args...) \
-	FPLOG_(state->seq, lvl, fmt, ##args)
-
 
 /* fwd decl */
 extern ddr_plugin_t ddr_plug;
@@ -107,6 +102,7 @@ typedef struct _crypt_state {
 	unsigned char *zerobuf;
 	unsigned int zerosize;
 	loff_t hole;
+	int slackpre, slackpost;
 } crypt_state;
 
 /* aes modules rely on avail of global crypto symbol to point to sec_fields ... */
@@ -143,7 +139,7 @@ int read_fd(unsigned char*, const char*, uint maxlen, const char*);
 int read_file(unsigned char*, const char*, uint maxlen);
 char* mystrncpy(unsigned char*, const char*, uint maxlen);
 int stripcrlf(char* str, uint maxlen);
-void whiteout(char* str, char quiet);
+void whiteout(char* str, char quiet, const char* opt);
 
 int set_flag(char* flg, const char* msg)
 {
@@ -303,7 +299,7 @@ int crypt_plug_init(void **stat, char* param, int seq, const opt_t *opt)
 		else if (!memcmp(param, "keyhex=", 7)) {
 			//err += parse_hex_u32((unsigned int*)state->sec->userkey1, param+7, state->alg->keylen/(8*sizeof(int))); 
 			err += parse_hex(state->sec->userkey1, param+7, state->alg->keylen/8); 
-			whiteout(param+7, opt->quiet);
+			whiteout(param+7, opt->quiet, "keyhex");
 			err += set_flag(&state->kset, "key");
 		} else if (!memcmp(param, "keyfd=", 6)) {
 			err += read_fd(state->sec->userkey1, param+6, 32, "key");
@@ -318,7 +314,7 @@ int crypt_plug_init(void **stat, char* param, int seq, const opt_t *opt)
 		else if (!memcmp(param, "ivhex=", 6)) {
 			//err += parse_hex_u32((unsigned int*)state->sec->nonce1, param+6, BLKSZ/sizeof(int));
 			err += parse_hex(state->sec->nonce1, param+6, BLKSZ);
-			whiteout(param+6, opt->quiet);
+			whiteout(param+6, opt->quiet, "ivhex");
 			err += set_flag(&state->iset, "IV");
 		} else if (!memcmp(param, "ivfd=", 5)) {
 			err += read_fd(state->sec->nonce1, param+5, BLKSZ, "iv");
@@ -332,7 +328,7 @@ int crypt_plug_init(void **stat, char* param, int seq, const opt_t *opt)
 			state->ivf = 1;
 		else if (!memcmp(param, "pass=", 5)) {
 			mystrncpy(state->sec->passphr, param+5, 128);
-			whiteout(param+5, opt->quiet);
+			whiteout(param+5, opt->quiet, "pass");
 			err += set_flag(&state->pset, "password");
 #if 0
 		} else if (!memcmp(param, "passhex=", 8)) {
@@ -354,11 +350,11 @@ int crypt_plug_init(void **stat, char* param, int seq, const opt_t *opt)
 		} else if (!memcmp(param, "salt=", 5)) {
 			//mystrncpy(state->sec->salt, param+5, 64);
 			gensalt(state->sec->salt, 8, param+5, NULL, 0); 
-			whiteout(param+5, opt->quiet);
+			whiteout(param+5, opt->quiet, NULL);
 			err += set_flag(&state->sset, "salt");
 		} else if (!memcmp(param, "salthex=", 8)) {
 			err += parse_hex(state->sec->salt, param+8, 8);
-			whiteout(param+8, opt->quiet);
+			whiteout(param+8, opt->quiet, NULL);
 			err += set_flag(&state->sset, "salt");
 		} else if (!memcmp(param, "saltfd=", 7)) {
 			err += read_fd(state->sec->salt, param+7, 8, "salt");
@@ -483,7 +479,7 @@ int crypt_plug_release(void **stat)
 		free(state->salt_xattr_name);
 #endif
 	if (state->zerobuf)
-		free(state->zerobuf);
+		slack_free(state->zerobuf, state->slackpre);
 	free(*stat);
 	return 0;
 }
@@ -703,7 +699,7 @@ int stripcrlf(char* str, uint maxlen)
 	return (oln == ln? 0: 1);
 }
 
-void whiteout(char* str, char quiet)
+void whiteout(char* str, char quiet, const char* opt)
 {
 #ifndef NO_WRITE_ARGV
 	int ln = strlen(str);
@@ -712,8 +708,8 @@ void whiteout(char* str, char quiet)
 	if (ln >= 1)
 		str[0] = 'X';
 #endif
-	if (!quiet)
-		FPLOG_(-1, WARN, "Don't specify sensitive data on the command line!\n", NULL);
+	if (!quiet && opt)
+		FPLOG_(-1, WARN, "Don't specify sensitive data (%s=) on the command line!\n", opt);
 }
 
 const char* mybasenm(const char* nm)
@@ -944,6 +940,8 @@ int crypt_open(const opt_t *opt, int ilnchg, int olnchg, int ichg, int ochg,
 	state->zerosize = MAX(65536, opt->softbs);
 	state->ilnchg = ilnchg;
 	state->islast = islast;
+	state->slackpre = totslack_pre;
+	state->slackpost = totslack_post;
 
 	sprintf(ivsnm, "IVS.%s", state->alg->name);
 	sprintf(keynm, "KEYS.%s", state->alg->name);
@@ -1054,9 +1052,12 @@ int crypt_open(const opt_t *opt, int ilnchg, int olnchg, int ichg, int ochg,
 			/* TODO: Check for size changing plugins */
 			gensalt(state->sec->salt, 8, mybasenm(encnm), NULL, encln);
 			if (!opt->quiet) {
-				if (encln)
+				if (encln) {
 					FPLOG(INFO, "Derived salt from %s=%016zx\n", mybasenm(encnm), encln);
-				else	
+					if ((ilnchg || olnchg) && state->saltlen == (size_t)-1 && state->enc)
+						FPLOG(WARN, "Note length and specify with saltlen=%zi for decryption\n",
+							encln);
+				} else
 					FPLOG(INFO, "Derived salt from %s\n", mybasenm(encnm));
 			}
 			state->sset = 1;
@@ -1299,6 +1300,18 @@ int crypt_open(const opt_t *opt, int ilnchg, int olnchg, int ichg, int ochg,
 		hexout(state->sec->charbuf1, state->sec->iv1.data, BLKSZ);
 		FPLOG(DEBUG, " IV: %s\n", state->sec->charbuf1);
 	}
+	/* Exit if there is a length change breaking us */
+	int needseek = !opt->nosparse + 2*opt->sparse;
+	if (needseek && (!state->alg->stream->seek_blk ||
+			 (state->alg->stream->needs_iv && ((state->enc && olnchg) | (!state->enc && ilnchg))))) {
+		int sev = needseek>1? FATAL: WARN;
+		if (!state->alg->stream->seek_blk)
+			FPLOG(sev, "Cipher stream mode does not support seek, use -A, avoid -a.\n");
+		else
+			FPLOG(sev, "Length changing plugins break sparse treatment, use -A, avoid -a\n");
+		if (sev == FATAL)
+			err++;
+	}
 	/* No need to keep key/passphr in memory */
 	memset(state->sec->userkey1, 0, state->alg->keylen/8);
 	memset(state->sec->passphr, 0, 128);
@@ -1396,14 +1409,9 @@ unsigned char* crypt_blk_cb(fstate_t *fst, unsigned char* bf,
 				exit(13);
 			}
 			/* TODO: Encrypt zeroes */
-			if (!state->zerobuf) {
-				state->zerobuf = malloc(state->zerosize);
-				if (!state->zerobuf) {
-					FPLOG(FATAL, "Failed allocating a zeroed buffer of %i size\n", state->zerosize);
-					raise(SIGQUIT);
-					return bf;
-				}
-			}
+			if (!state->zerobuf)
+		       		state->zerobuf = slack_alloc(state->zerosize, state->slackpre, state->slackpost,
+							     CLEAR_SLACK, &ddr_plug, state->seq);
 			/* Avoid infinite loops */
 			assert((fst->ipos > state->lastpos && !state->rev) || (fst->ipos < state->lastpos && state->rev));
 			bf = state->zerobuf;
